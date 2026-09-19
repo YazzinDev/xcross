@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -4965,7 +4966,7 @@ let package = Package(
       }
     }
 
-    final blobs = await _readGitBlobs(root, links.values.toSet(), git);
+    final blobs = await readGitBlobs(root, links.values.toSet(), git);
     final targets = <String, String>{
       for (final link in links.entries)
         link.key: utf8
@@ -5318,7 +5319,8 @@ let package = Package(
     }
   }
 
-  static Future<Map<String, List<int>>> _readGitBlobs(
+  @visibleForTesting
+  static Future<Map<String, List<int>>> readGitBlobs(
     String repoPath,
     Set<String> objectIds,
     String git,
@@ -5330,18 +5332,55 @@ let package = Package(
       'cat-file',
       '--batch',
     ]);
-    for (final objectId in objectIds) {
-      process.stdin.writeln(objectId);
-    }
-    await process.stdin.close();
-    final output = await process.stdout.fold<List<int>>(
+    // Start draining before writing a single request. `cat-file --batch`
+    // answers each object as it reads it, so its stdout fills up while this
+    // process is still feeding stdin. A pipe buffer is finite (64 KiB on
+    // Windows), so writing the whole request list first deadlocks as soon as
+    // the replies outgrow it: git blocks writing output nobody is reading,
+    // and this process blocks writing input git has stopped reading. A
+    // checkout with enough symlinked headers (SDWebImage) reliably crosses
+    // that line, which is what turned a CI build into a multi-hour hang.
+    final outputFuture = process.stdout.fold<List<int>>(
       <int>[],
       (bytes, chunk) => bytes..addAll(chunk),
     );
-    final error = await process.stderr
+    final errorFuture = process.stderr
         .transform(const Utf8Decoder(allowMalformed: true))
         .join();
-    final exitCode = await process.exitCode;
+    // Backstop for any remaining way this child could stop making progress.
+    // Reading local objects out of an existing checkout is a sub-second
+    // operation, so a run this long is a hang, not slow work.
+    const timeout = Duration(minutes: 5);
+    var timedOut = false;
+    final timer = Timer(timeout, () {
+      timedOut = true;
+      unawaited(ProcessRunner.killTree(process));
+    });
+    final List<int> output;
+    final String error;
+    final int exitCode;
+    try {
+      for (final objectId in objectIds) {
+        process.stdin.writeln(objectId);
+      }
+      // A killed child's stdin is a broken pipe; the failure that matters is
+      // reported from the exit code below.
+      try {
+        await process.stdin.flush();
+        await process.stdin.close();
+      } on Object catch (_) {}
+      exitCode = await process.exitCode;
+      output = await outputFuture;
+      error = await errorFuture;
+    } finally {
+      timer.cancel();
+    }
+    if (timedOut) {
+      throw FlutterBuildError(
+        'Timed out after ${timeout.inMinutes} minutes reading symlink targets '
+        'in SwiftPM checkout $repoPath.',
+      );
+    }
     if (exitCode != 0) {
       throw FlutterBuildError(
         'Could not read symlink targets in SwiftPM checkout $repoPath: $error',
