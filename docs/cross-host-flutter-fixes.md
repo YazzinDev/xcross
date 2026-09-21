@@ -242,3 +242,44 @@ modified by it.
 This evidence establishes the directory-copy repair, not a new full application
 or device validation. The earlier remote-manifest blocker remains outside this
 PR; subsequent reproduction stages must be reported separately.
+
+## Follow-up: oversized Windows Swift compiler command (2026-09-22)
+
+After the directory-copy repair, the release-based staged app build reached
+the aggregate plugin module, then failed before starting its compiler:
+
+```text
+error: command Compiling Swift Module 'FlutterPluginsGenerated' (1 sources) failed: unable to spawn process '<toolchain>\swiftc.exe' (Der Dateiname oder die Erweiterung ist zu lang.
+)
+```
+
+Only the toolchain prefix above is redacted. The executable path was 90 characters;
+the build description's 600 additional arguments alone totaled 34,470 characters,
+already exceeding Windows' 32,767-character process command-line limit. Shorter
+cache paths would only postpone this failure for larger dependency graphs.
+
+Fix `a6d0a4d` (reproduction equivalent `606db5b`) extends the existing Windows
+generated-file repair lifecycle in `ios_plugin_package.dart`. Oversized inline
+`swiftc` argument arrays in scratch YAML plans are replaced with a content-addressed
+response file under `.xcross-response`. Arguments retain their order, with Windows
+quoting for spaces, quotes, empty arguments and trailing backslashes. Command keys,
+inputs and outputs remain intact; short commands and other executables are left
+unchanged. The existing repair/retry handles SwiftPM regenerating the plan.
+
+The threshold is 28,000 unquoted characters, leaving headroom below the Windows
+limit for ordinary argument quoting. This is scoped to Swift compiler invocations,
+not a general repair for all possible long subprocess commands.
+
+Validation: the actual previously failing compiler argv was externalized and
+executed successfully (exit 0), including both compile and emit-module jobs. The
+final probe used a response-file path containing spaces and reduced the launch
+command to 243 characters. `windows_swift_response_test.dart` verifies encoding,
+argument order, unchanged commands and idempotence. The two Windows regression
+files pass four tests on the PR branch; targeted analysis on the reproduction
+branch is clean. The reproduction bundle rebuilt successfully.
+
+The local raw probe is `build/reproduction-evidence/response-file-target-final.log`;
+it is not published because it contains private application paths. This proves
+the compiler-launch fix, not completion of a new end-to-end app/device build.
+The cumulative app rerun is recorded separately as `stage-08-response-files.log`
+and retains the previously disclosed local-only remote-manifest override.
