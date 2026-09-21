@@ -301,3 +301,13 @@ prebuild with Swift exception 5 and a duplicate `Foundation` module diagnostic
 showing two visually identical PCM paths. Its cause is not yet established.
 The successful isolated aggregate compiler probe must not be presented as a
 successful full application build. The guard follow-up remains local.
+
+The subsequent full reproduction-branch build with the explicit guard completed
+successfully (`stage-09-windows-guard.log`, exit 0): SwiftPM finished in 7m28s,
+Runner compiled in 1.1s, and `app.app` was written. No caches were cleared between
+the failed stage 8 and this control. The Foundation failure did not recur; its
+cause remains unproven. Both guard-enabled CLI bundles rebuilt, but this full app
+run used the reproduction bundle, not the full PR branch bundle. It retained
+the previously documented staged patches and remote-manifest override. No device
+launch or native Linux/macOS build was performed. Guard/documentation commits
+have not been pushed since the user's request to validate locally first.
