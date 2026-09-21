@@ -1,5 +1,8 @@
 # Cross-host Flutter build and debug fixes
 
+For the concise error-log sequence and per-error fixes, see
+[Windows build reproduction](windows-build-reproduction.md).
+
 This change targets Windows-hosted Flutter iOS builds and the shared debugger
 and SwiftPM mechanisms. It is based on upstream
 `00a55b0b765c50b2858b664a5abf006cdfda77b0`; it does not import the history or
