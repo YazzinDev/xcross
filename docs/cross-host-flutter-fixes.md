@@ -159,3 +159,86 @@ clean-machine reproducibility or Linux/macOS CI compatibility. Early host
 evaluation of an invalid remote manifest remains outside the included fixes.
 Maintainership review and the public cross-host integration matrix remain
 important before merge.
+
+## Follow-up: Windows binary-framework directory copy (2026-09-22)
+
+### Trigger and reproduction boundary
+
+A staged reproduction based on release `v1.4.5` (`820cc890`) exposed an additional
+failure after SDK/tool-shim fixes, dangling-symlink handling, and the native
+SwiftPM backend selection from upstream `00a55b0` had been applied. A local-only
+remote-manifest override was also necessary to pass the earlier Sentry `getenv`
+failure; that override is **not** part of this PR. This is a newly reproduced
+downstream blocker, not the first error from an unchanged release executable.
+
+Environment: Windows x64, Swift 6.4.0 `NoAsserts`, Dart 3.11.5 / Flutter 3.41.7,
+installed iPhoneOS 26.5 SDK, Debug/JIT build. App/pub/xcross caches were isolated;
+the existing SDK and global Git download cache were retained.
+
+The failure repeated on an unchanged second attempt. Exact relevant log lines
+below retain the dependency name; only the private workspace prefix is redacted:
+
+```text
+[1/4] Copying RecaptchaEnterpriseSDK.framework
+error: <workspace>\scratch\arm64-apple-ios\debug\RecaptchaEnterpriseSDK.framework is not a directory
+```
+
+The failing operation was `swift-build --build-system native ... --target
+RecaptchaEnterprise`. The deprecated-backend and conflicting-package-identity
+warnings were separate from this fatal copy error. The source framework was
+populated, while the destination was left as an empty ordinary directory.
+
+### Cause, chosen correction and alternatives
+
+The generated `description.json` contained a directory copy source with an
+extended Windows drive prefix (`\\?\C:\...`). A standalone Foundation
+`FileManager.copyItem(at:to:)` probe failed for that source; the error showed a
+malformed `/?/C:/.../Headers` URL path and Win32 error 123. The same source without
+the extended prefix copied successfully. No source contents were changed.
+
+SwiftPM's [CopyCommand](https://github.com/swiftlang/swift-package-manager/blob/main/Sources/Build/LLBuildCommands.swift)
+reads its copy inputs from the build description. Normalizing only the affected
+directory input in that description allowed the actual target to finish:
+
+```text
+[0/3] Copying RecaptchaEnterpriseSDK.framework
+[4/5] Emitting module RecaptchaEnterprise
+[5/5] Compiling RecaptchaEnterprise RecaptchaInteropBidings.swift
+Build of target: 'RecaptchaEnterprise' complete! (11.09s)
+```
+
+The first manual probe was overwritten by SwiftPM replanning and still failed;
+the second probe, applied to the current plan, succeeded. This is why the fix
+belongs in the existing generated-file repair lifecycle, including its bounded
+repair-and-retry path, rather than as a one-time cache edit.
+
+- **Chosen:** normalize extended drive-qualified directory copy inputs in
+  `description.json` on Windows. Leave command keys, output nodes, the llbuild
+  YAML, file copies, ordinary paths and UNC paths unchanged. Preserve unchanged
+  descriptions byte-for-byte and make repeated repair a no-op.
+- Shortening or relocating every cache could avoid some long paths but changes
+  unrelated cache behavior and does not correct an already generated plan.
+- Pre-copying frameworks or ignoring the failing target would bypass SwiftPM
+  dependency tracking or conceal genuine build errors; neither is used.
+
+There is no framework-name, dependency-version or app-specific branch in the fix.
+Authentication, signing storage, SDK installation and source checkouts are not
+modified by it.
+
+### Files, commits and validation
+
+- PR fix: `802fc6f`; equivalent release-reproduction step: `85ec1a6`.
+- `packages/xcross/lib/src/flutter/build/ios_plugin_package.dart` extends
+  `repairWindowsGeneratedBuildFiles` with scoped copy-source normalization.
+- `packages/xcross/test/flutter/build/windows_directory_copy_test.dart` covers
+  long paths on a non-C drive, unchanged node identities, unrelated fields,
+  ordinary/UNC/file paths, Windows-only invocation and idempotence.
+- The focused plugin-package and new regression suites passed **117 tests** on
+  the PR branch. The same selection passed 116 on the older reproduction base.
+- Both the complete reproduction and PR CLI bundles rebuilt successfully;
+  targeted Dart analysis reports no issues. The real affected
+  SwiftPM target passed after normalizing its generated copy input, as above.
+
+This evidence establishes the directory-copy repair, not a new full application
+or device validation. The earlier remote-manifest blocker remains outside this
+PR; subsequent reproduction stages must be reported separately.
