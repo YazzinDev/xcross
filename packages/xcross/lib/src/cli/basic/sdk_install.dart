@@ -21,6 +21,13 @@ const sdkIncludedRoots = <String>[
   'Developer/Toolchains/XcodeDefault.xctoolchain/usr/include',
 ];
 
+/// Swift's platform registry needs the descriptors of the imported platform
+/// and toolchain as well as their SDK and library subtrees.
+const sdkIncludedFiles = <String>[
+  'Developer/Platforms/iPhoneOS.platform/Info.plist',
+  'Developer/Toolchains/XcodeDefault.xctoolchain/Info.plist',
+];
+
 const _platformDeveloper = 'Developer/Platforms/iPhoneOS.platform/Developer';
 const _toolchain = 'Developer/Toolchains/XcodeDefault.xctoolchain';
 const _swiftResources = '$_toolchain/usr/lib/swift';
@@ -56,6 +63,9 @@ abstract final class SdkInstall {
   /// entry is outside [sdkIncludedRoots].
   static String? sdkRelativePath(String name) {
     final archiveName = name.replaceAll(r'\', '/');
+    for (final file in sdkIncludedFiles) {
+      if (archiveName == file || archiveName.endsWith('/$file')) return file;
+    }
     for (final root in sdkIncludedRoots) {
       if (archiveName == root || archiveName.startsWith('$root/')) {
         return archiveName;
@@ -135,6 +145,13 @@ abstract final class SdkInstall {
 
     if (materializeLinks ?? Platform.isWindows) {
       await _materializeSdkLinks(root, links, onProgress: onLinkProgress);
+      // Copies of SDK aliases look like distinct SDKs to platform discovery.
+      // Materialize first: either side of the alias can hold the actual data.
+      for (final alias in materializedSdkAliases(root, links)) {
+        if (Directory(ioPath(alias)).existsSync()) {
+          await Directory(ioPath(alias)).delete(recursive: true);
+        }
+      }
     } else {
       var linked = 0;
       for (final link in links.entries) {
@@ -215,6 +232,39 @@ abstract final class SdkInstall {
         );
       }
     }
+  }
+
+  /// Unversioned SDK directories duplicated by link materialization.
+  ///
+  /// Only directory aliases directly under an SDKs directory qualify. The
+  /// platform name is irrelevant: device and simulator layouts use the same
+  /// versioned/unversioned alias convention.
+  static Set<String> materializedSdkAliases(
+    String root,
+    Map<String, String> links,
+  ) {
+    final aliases = <String>{};
+    final versioned = RegExp(r'^(.+?)[0-9]+(?:\.[0-9]+)*\.sdk$');
+    for (final link in links.entries) {
+      final target = _resolvedSdkLinkTarget(root, link.key, link.value);
+      final parent = p.dirname(link.key);
+      if (!p.isWithin(root, link.key) ||
+          p.basename(parent) != 'SDKs' ||
+          parent != p.dirname(target)) {
+        continue;
+      }
+      final linkName = p.basename(link.key);
+      final targetName = p.basename(target);
+      final linkVersion = versioned.firstMatch(linkName);
+      final targetVersion = versioned.firstMatch(targetName);
+      if (linkVersion != null && targetName == '${linkVersion[1]}.sdk') {
+        aliases.add(target);
+      } else if (targetVersion != null &&
+          linkName == '${targetVersion[1]}.sdk') {
+        aliases.add(link.key);
+      }
+    }
+    return aliases;
   }
 
   /// Resolves a link target and rejects anything reaching outside the bundle.
