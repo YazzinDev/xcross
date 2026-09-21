@@ -147,8 +147,15 @@ Windows validation on 2026-09-21:
   base, and the same warning reproduced in isolated baseline analysis;
   unrelated configuration code is intentionally unchanged.
 
-This is not a claim of a new physical-device end-to-end run or Linux/macOS CI
-verification for this generalized branch. The previous exploratory device result
-does not prove this different patch set. In particular, early host evaluation of
-an invalid remote manifest remains outside the included fixes. Maintainership
-review and the public cross-host integration matrix remain important before merge.
+Follow-up device validation on 2026-09-21 used this generalized branch's complete
+Windows bundle, built with `dart run tool/build_xcross.dart`. Both `xcross flutter
+build` and `xcross flutter run` succeeded against a real Flutter application:
+signing reused the existing login, installation completed on a physical iPhone,
+the debugger attached, the VM Service connected, and a requested hot reload
+completed in 0.1 seconds. The user also confirmed the application was working.
+
+This run reused existing local SDK and dependency caches; it does not establish
+clean-machine reproducibility or Linux/macOS CI compatibility. Early host
+evaluation of an invalid remote manifest remains outside the included fixes.
+Maintainership review and the public cross-host integration matrix remain
+important before merge.
