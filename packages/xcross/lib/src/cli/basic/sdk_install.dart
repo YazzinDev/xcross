@@ -60,7 +60,7 @@ const swiftSdkMismatchMarker = 'this SDK is not supported by the compiler';
 /// Helpers for extracting and wiring the Darwin Swift SDK bundle.
 abstract final class SdkInstall {
   /// Destination-relative path for an included cpio entry, or null when the
-  /// entry is outside [sdkIncludedRoots].
+  /// entry is outside [sdkIncludedRoots] and [sdkIncludedFiles].
   static String? sdkRelativePath(String name) {
     final archiveName = name.replaceAll(r'\', '/');
     for (final file in sdkIncludedFiles) {
@@ -174,7 +174,7 @@ abstract final class SdkInstall {
   }
 
   /// Absolute destination for an included cpio entry, or null when the entry
-  /// is outside [sdkIncludedRoots].
+  /// is outside [sdkIncludedRoots] and [sdkIncludedFiles].
   ///
   /// Rejects `..` segments and anything resolving outside [root] so a hostile
   /// archive cannot write over arbitrary host files.
