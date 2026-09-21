@@ -601,7 +601,7 @@ abstract final class GeneratedPluginsPackage {
     if (!(windows ?? Platform.isWindows)) return false;
     final root = Directory(targetBuildDir);
     if (!root.existsSync()) return false;
-    var changed = false;
+    var changed = await repairWindowsSwiftResponseFiles(scratchPath);
     for (final json in [
       ...root
           .listSync(recursive: true, followLinks: false)
@@ -643,6 +643,61 @@ abstract final class GeneratedPluginsPackage {
           );
       if (normalized != original) {
         await accessor.writeAsString(normalized);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /// llbuild's shell commands bypass Swift's driver-side response-file fallback.
+  /// Keep the generated graph intact, replacing only oversized compiler argv.
+  @visibleForTesting
+  static Future<bool> repairWindowsSwiftResponseFiles(
+    String scratchPath,
+  ) async {
+    var changed = false;
+    for (final plan in Directory(scratchPath).listSync().whereType<File>()) {
+      if (p.extension(plan.path) != '.yaml') continue;
+      final original = await plan.readAsString();
+      final lines = original.split('\n');
+      var repaired = false;
+      for (var i = 0; i < lines.length; i++) {
+        const prefix = '    args: ';
+        if (!lines[i].startsWith('$prefix[')) continue;
+        final decoded = jsonDecode(lines[i].substring(prefix.length));
+        if (decoded is! List || !decoded.every((arg) => arg is String)) {
+          continue;
+        }
+        final args = decoded.cast<String>();
+        if (args.isEmpty ||
+            !{
+              'swiftc',
+              'swiftc.exe',
+            }.contains(p.windows.basename(args.first).toLowerCase()) ||
+            args.join(' ').length < 28000) {
+          continue;
+        }
+        final contents = args
+            .skip(1)
+            .map(
+              (arg) =>
+                  '"${arg.replaceAllMapped(RegExp(r'(\\*)"'), (match) => '${match[1]}${match[1]}\\"').replaceAllMapped(RegExp(r'\\+$'), (match) => '${match[0]}${match[0]}')}"',
+            )
+            .join('\n');
+        final digest = sha256.convert(utf8.encode(contents));
+        final file = File(
+          p.join(scratchPath, '.xcross-response', '$digest.rsp'),
+        );
+        await file.parent.create(recursive: true);
+        if (!file.existsSync() || await file.readAsString() != contents) {
+          await file.writeAsString(contents);
+        }
+        lines[i] =
+            '$prefix${jsonEncode([args.first, '@${p.absolute(file.path)}'])}';
+        repaired = true;
+      }
+      if (repaired) {
+        await plan.writeAsString(lines.join('\n'));
         changed = true;
       }
     }
