@@ -601,7 +601,10 @@ abstract final class GeneratedPluginsPackage {
     if (!(windows ?? Platform.isWindows)) return false;
     final root = Directory(targetBuildDir);
     if (!root.existsSync()) return false;
-    var changed = await repairWindowsSwiftResponseFiles(scratchPath);
+    var changed = await repairWindowsSwiftResponseFiles(
+      scratchPath,
+      windows: true,
+    );
     for (final json in [
       ...root
           .listSync(recursive: true, followLinks: false)
@@ -653,8 +656,10 @@ abstract final class GeneratedPluginsPackage {
   /// Keep the generated graph intact, replacing only oversized compiler argv.
   @visibleForTesting
   static Future<bool> repairWindowsSwiftResponseFiles(
-    String scratchPath,
-  ) async {
+    String scratchPath, {
+    bool? windows,
+  }) async {
+    if (!(windows ?? Platform.isWindows)) return false;
     var changed = false;
     for (final plan in Directory(scratchPath).listSync().whereType<File>()) {
       if (p.extension(plan.path) != '.yaml') continue;

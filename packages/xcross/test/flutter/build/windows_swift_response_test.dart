@@ -29,6 +29,22 @@ void main() {
       expect(
         await GeneratedPluginsPackage.repairWindowsSwiftResponseFiles(
           root.path,
+          windows: false,
+        ),
+        isFalse,
+      );
+      expect(
+        Directory(p.join(root.path, '.xcross-response')).existsSync(),
+        isFalse,
+      );
+      expect(
+        await plan.readAsString(),
+        'commands:\n    args: ${jsonEncode(arguments)}\n$short\n$other\n',
+      );
+      expect(
+        await GeneratedPluginsPackage.repairWindowsSwiftResponseFiles(
+          root.path,
+          windows: true,
         ),
         isTrue,
       );
@@ -42,7 +58,7 @@ void main() {
       expect(response, [
         '"-D"',
         '"${'A' * 29000}"',
-      r'"C:\path with spaces\file.swift"',
+        r'"C:\path with spaces\file.swift"',
         r'"quote\"value"',
         '""',
         r'"ends\\"',
@@ -53,6 +69,7 @@ void main() {
       expect(
         await GeneratedPluginsPackage.repairWindowsSwiftResponseFiles(
           root.path,
+          windows: true,
         ),
         isFalse,
       );
