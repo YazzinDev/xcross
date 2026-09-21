@@ -618,7 +618,10 @@ abstract final class GeneratedPluginsPackage {
     ]) {
       if (!json.existsSync()) continue;
       final original = await json.readAsString();
-      final normalized = original.replaceAll(r'\\\\?\\C:\\?\\C:\\', r'C:\\');
+      var normalized = original.replaceAll(r'\\\\?\\C:\\?\\C:\\', r'C:\\');
+      if (p.basename(json.path) == 'description.json') {
+        normalized = normalizeWindowsDirectoryCopyInputs(normalized);
+      }
       if (normalized != original) {
         await json.writeAsString(normalized);
         changed = true;
@@ -644,6 +647,38 @@ abstract final class GeneratedPluginsPackage {
       }
     }
     return changed;
+  }
+
+  /// Foundation's directory copy mishandles extended drive paths as file URLs
+  /// on Windows. Keep llbuild's node identities intact and normalize only the
+  /// directory source passed by CopyCommand to FileManager in description.json.
+  @visibleForTesting
+  static String normalizeWindowsDirectoryCopyInputs(String description) {
+    final decoded = jsonDecode(description);
+    if (decoded is! Map<String, dynamic>) return description;
+    final commands = decoded['copyCommands'];
+    if (commands is! Map<String, dynamic>) return description;
+    var changed = false;
+    for (final command in commands.values) {
+      if (command is! Map<String, dynamic>) continue;
+      final inputs = command['inputs'];
+      if (inputs is! List<dynamic>) continue;
+      for (final input in inputs) {
+        if (input is! Map<String, dynamic> || input['kind'] != 'directory') {
+          continue;
+        }
+        final name = input['name'];
+        if (name is String &&
+            name.startsWith(r'\\?\') &&
+            RegExp(r'^[a-zA-Z]:\\').hasMatch(name.substring(4))) {
+          input['name'] = name.substring(4);
+          changed = true;
+        }
+      }
+    }
+    return changed
+        ? const JsonEncoder.withIndent('  ').convert(decoded)
+        : description;
   }
 
   /// Swift reports a toolchain/SDK ABI mismatch once per importing file and
