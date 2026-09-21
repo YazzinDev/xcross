@@ -7,6 +7,7 @@ import 'package:xcross/src/flutter/build/internal/apple_tool_shims.dart';
 import 'package:xcross/src/flutter/build/internal/flutter_tool_workspace.dart';
 import 'package:xcross/src/flutter/build/internal/native_asset_frameworks.dart';
 import 'package:xcross/src/flutter/build/internal/native_assets_hook_discovery.dart';
+import 'package:xcross/src/flutter/build/internal/native_assets_manifest.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
 
 import 'package:xcross/src/flutter/build/ios_engine_cache.dart';
@@ -93,7 +94,15 @@ final class IosNativeAssetsBuilder {
       );
     }
 
-    final frameworks = collectNativeAssetFrameworks(output);
+    final manifestFile = File(manifest);
+    final original = await manifestFile.readAsString();
+    final normalized = normalizeIosNativeAssetsManifest(original);
+    if (normalized != original) await manifestFile.writeAsString(normalized);
+
+    final frameworks = collectNativeAssetFrameworks(
+      output,
+      projectRoot: projectRoot,
+    );
     await thinFrameworksToArm64(frameworks, lipo: tools.lipo);
     await alignNativeAssetLinkedit(frameworks);
     await normalizeNativeAssetInstallNames(frameworks);

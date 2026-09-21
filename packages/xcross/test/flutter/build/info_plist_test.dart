@@ -48,6 +48,23 @@ BAZ = a=b
         'BAZ': 'a=b',
       });
     });
+
+    test('reads configuration files in Xcode precedence order', () async {
+      final tmp = await Directory.systemTemp.createTemp('xcconfig_files-');
+      try {
+        final generated = File(p.join(tmp.path, 'Generated.xcconfig'))
+          ..writeAsStringSync('APP_ID = generated\nSHARED = generated\n');
+        final debug = File(p.join(tmp.path, 'Debug.xcconfig'))
+          ..writeAsStringSync('APP_ID = debug\n');
+
+        expect(
+          await InfoPlist.readXcconfigFiles([generated.path, debug.path]),
+          {'APP_ID': 'debug', 'SHARED': 'generated'},
+        );
+      } finally {
+        await tmp.delete(recursive: true);
+      }
+    });
   });
 
   group('applyIosRequiredKeys', () {
@@ -407,6 +424,38 @@ BAZ = a=b
 
       expect(updated, contains('<key>AppGroupId</key>'));
       expect(updated, contains('<string>group.qualified</string>'));
+    });
+  });
+
+  group('applyDebugVmServiceDiscovery', () {
+    test('fills an empty service array and remains idempotent', () {
+      const xml =
+          '<plist><dict><key>NSBonjourServices</key><array/></dict></plist>';
+      final updated = InfoPlist.applyDebugVmServiceDiscovery(xml);
+      expect(RegExp('_dartVmService._tcp').allMatches(updated).length, 1);
+      expect(InfoPlist.applyDebugVmServiceDiscovery(updated), updated);
+    });
+    test('adds VM discovery without overwriting app values', () {
+      const xml = '''
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>NSBonjourServices</key><array><string>_custom._tcp</string></array>
+  <key>NSLocalNetworkUsageDescription</key><string>Custom text</string>
+</dict></plist>''';
+
+      final result = InfoPlist.applyDebugVmServiceDiscovery(xml);
+
+      expect(result, contains('<string>_custom._tcp</string>'));
+      expect(result, contains('<string>_dartVmService._tcp</string>'));
+      expect(result, contains('<string>Custom text</string>'));
+    });
+
+    test('adds both keys when the template lacks them', () {
+      final result = InfoPlist.applyDebugVmServiceDiscovery(_minimalPlist);
+
+      expect(result, contains('<key>NSBonjourServices</key>'));
+      expect(result, contains('<string>_dartVmService._tcp</string>'));
+      expect(result, contains('<key>NSLocalNetworkUsageDescription</key>'));
     });
   });
 

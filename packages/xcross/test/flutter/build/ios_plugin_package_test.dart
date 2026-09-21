@@ -2177,8 +2177,14 @@ let package = Package(
         ..writeAsStringSync('../Sources/Types.h');
       final dirLink = File(p.join(repo, 'include', 'nested'))
         ..writeAsStringSync('../Sources/nested');
+      final danglingLink = File(p.join(repo, 'include', 'optional-example'))
+        ..writeAsStringSync('../Sources/not-present');
       git(['add', 'Sources', 'include']);
-      for (final link in ['include/Types.h', 'include/nested']) {
+      for (final link in [
+        'include/Types.h',
+        'include/nested',
+        'include/optional-example',
+      ]) {
         final hash = (git(['hash-object', '-w', link]).stdout as String).trim();
         git(['update-index', '--cacheinfo', '120000', hash, link]);
       }
@@ -2193,6 +2199,13 @@ let package = Package(
       );
       expect(FileSystemEntity.isLinkSync(fileLink.path), isTrue);
       expect(FileSystemEntity.isLinkSync(dirLink.path), isTrue);
+      expect(FileSystemEntity.isLinkSync(danglingLink.path), isTrue);
+      expect(
+        Link(danglingLink.path).targetSync(),
+        Platform.isWindows
+            ? r'..\Sources\not-present'
+            : '../Sources/not-present',
+      );
       expect(fileLink.readAsStringSync(), 'typedef int T;\n');
       expect(File(p.join(dirLink.path, 'a.txt')).readAsStringSync(), 'a');
 
@@ -3638,7 +3651,7 @@ let package = Package(
           'Flutter.xcframework/ios-arm64',
         ]),
       );
-      expect(arguments, contains('-disable-availability-checking'));
+      expect(arguments, isNot(contains('-disable-availability-checking')));
       expect(arguments, contains('--disable-automatic-resolution'));
       expect(arguments, isNot(contains('-install_name')));
     });

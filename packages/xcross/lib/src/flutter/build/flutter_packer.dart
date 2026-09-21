@@ -143,6 +143,7 @@ final class FlutterPacker {
       flutterRoot,
       deploymentTarget: deploymentTarget,
       pluginsLibrary: pluginsBuild?.libraryPath,
+      nativeAssetFrameworks: nativeAssets.frameworks,
       verbose: Log.isVerbose,
     );
 
@@ -391,6 +392,7 @@ final class FlutterPacker {
     required IosDeploymentTarget deploymentTarget,
     required bool verbose,
     String? pluginsLibrary,
+    List<String> nativeAssetFrameworks = const [],
   }) async {
     final xcframework = IosEngineCache(
       flutterRoot: flutterRoot,
@@ -411,6 +413,7 @@ final class FlutterPacker {
       outputDir: p.join(projectRoot, 'build', 'xcross-flutter-runner-bin'),
       deploymentTarget: deploymentTarget,
       pluginsLibrary: pluginsLibrary,
+      nativeAssetFrameworks: nativeAssetFrameworks,
       verbose: verbose,
     );
 
@@ -554,6 +557,7 @@ final class FlutterPacker {
       bundleId: bundleId,
       deploymentTarget: deploymentTarget,
     );
+    plistXml = InfoPlist.applyDebugVmServiceDiscovery(plistXml);
     plistXml = InfoPlist.stripUnsatisfiableStoryboards(plistXml, bundleDir);
     plistXml = InfoPlist.applySceneLifecycle(plistXml);
     plistXml = InfoPlist.normalizeObjCClassNames(plistXml);
@@ -584,7 +588,8 @@ final class FlutterPacker {
   /// Precedence (lowest → highest):
   ///   1. Hard-coded defaults (`1.0.0` / `1`).
   ///   2. `Generated.xcconfig` values from `flutter build` tooling.
-  ///   3. Explicit `--build-name` / `--build-number` CLI flags.
+  ///   3. `Debug.xcconfig` application build settings.
+  ///   4. Explicit `--build-name` / `--build-number` CLI flags.
   Future<Map<String, String>> _buildSubstitutionMap() async {
     final subs = <String, String>{
       'EXECUTABLE_NAME': PlistDefaults.executable,
@@ -611,12 +616,13 @@ final class FlutterPacker {
       subs['CUSTOM_GROUP_ID'] = hostGroups.first;
     }
 
-    final xcconfigFile = File(
-      p.join(projectRoot, 'ios', 'Flutter', 'Generated.xcconfig'),
+    final flutterConfigDirectory = p.join(projectRoot, 'ios', 'Flutter');
+    subs.addAll(
+      await InfoPlist.readXcconfigFiles([
+        p.join(flutterConfigDirectory, 'Generated.xcconfig'),
+        p.join(flutterConfigDirectory, 'Debug.xcconfig'),
+      ]),
     );
-    if (xcconfigFile.existsSync()) {
-      subs.addAll(InfoPlist.parseXcconfig(await xcconfigFile.readAsString()));
-    }
 
     if (options.buildName != null) {
       subs['FLUTTER_BUILD_NAME'] = options.buildName!;

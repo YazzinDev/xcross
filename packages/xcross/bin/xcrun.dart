@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cli_kit/cli_kit.dart';
 import 'package:darwin_sdk_kit/darwin_sdk_kit.dart';
 import 'package:path/path.dart' as p;
+import 'package:xcross/src/version.dart';
 import 'package:xcross/xcross.dart';
 
 Future<void> main(List<String> arguments) async {
@@ -13,12 +14,65 @@ Future<void> main(List<String> arguments) async {
   }
 
   try {
+    final shimResponse = xcrunShimResponse(arguments);
+    if (shimResponse != null) {
+      stdout.writeln(shimResponse);
+      return;
+    }
     await XcrossRuntimeConfig.initialize();
     exitCode = await runXcrun(arguments);
   } on Object catch (error) {
     stderr.writeln('xcrun: $error');
     exitCode = 1;
   }
+}
+
+String? _readShimSdk(String executable) {
+  final sidecar = File('$executable.sdk');
+  if (!sidecar.existsSync()) return null;
+  final sdk = sidecar.readAsStringSync().trim();
+  return sdk.isEmpty ? null : sdk;
+}
+
+/// Answers the `xcrun` probes that Flutter native-asset hooks run from a
+/// sanitized environment.
+String? xcrunShimResponse(List<String> arguments, {String? executable}) {
+  final xcrunExecutable = executable ?? Platform.resolvedExecutable;
+  final shimSdk = _readShimSdk(xcrunExecutable);
+  if (shimSdk == null) return null;
+
+  if (arguments.contains('--show-sdk-path')) return shimSdk;
+  if (arguments.contains('--show-sdk-platform-path')) {
+    return _sdkPlatformPath(shimSdk);
+  }
+  // native_toolchain_c probes xcrun's version before it asks for the SDK.
+  if (arguments.contains('--version')) {
+    // Source builds are labelled "unreleased", but the hook's tool resolver
+    // requires a numeric version even for a development executable.
+    const version = XcrossVersion.isReleased ? XcrossVersion.current : '0.0.0';
+    return 'xcross xcrun $version';
+  }
+  return findShimTool(arguments, executable: xcrunExecutable);
+}
+
+/// Resolves a compiler shim without consulting user configuration.
+///
+/// Flutter invokes `xcrun --find` from a sanitized native-assets hook
+/// environment. On Windows, PATH probing can reconstruct an existing
+/// lowercase `clang.exe` as `clang.EXE` from the default PATHEXT value. That
+/// spelling is rejected by native_toolchain_c's case-sensitive recognizer.
+String? findShimTool(List<String> arguments, {String? executable}) {
+  final xcrunExecutable = executable ?? Platform.resolvedExecutable;
+  if (_readShimSdk(xcrunExecutable) == null) return null;
+
+  final find = arguments.indexOf('--find');
+  if (find == -1 || find + 1 >= arguments.length) return null;
+
+  final tool = arguments[find + 1];
+  if (!{'clang', 'cc', 'ar', 'ld'}.contains(tool)) return null;
+
+  final candidate = p.join(p.dirname(xcrunExecutable), '$tool.exe');
+  return File(candidate).existsSync() ? candidate : null;
 }
 
 Future<int> runXcrun(
@@ -36,6 +90,10 @@ Future<int> runXcrun(
 
   if (arguments.contains('--show-sdk-path')) {
     stdout.writeln(sdk.iPhoneOSSdk());
+    return 0;
+  }
+  if (arguments.contains('--show-sdk-platform-path')) {
+    stdout.writeln(_sdkPlatformPath(sdk.iPhoneOSSdk()));
     return 0;
   }
 
@@ -143,3 +201,7 @@ Future<String?> _resolveTool(
 
 bool _isCurrentExecutable(String path) =>
     p.canonicalize(path) == p.canonicalize(Platform.resolvedExecutable);
+
+/// The iPhoneOS SDK lives at `<platform>/Developer/SDKs/<sdk>.sdk`.
+String _sdkPlatformPath(String sdkPath) =>
+    p.dirname(p.dirname(p.dirname(sdkPath)));

@@ -34,6 +34,17 @@ const String _flutterFrameworkPackageName = 'FlutterFramework';
 /// plugin's native code.
 const String _pluginsProductName = 'FlutterPluginsGenerated';
 
+String _prependPathEntry(
+  String directory,
+  String? path, {
+  required bool windows,
+}) => path == null || path.isEmpty
+    ? directory
+    // `pathSeparator` joins a directory's components (`\\` on Windows), not
+    // entries in PATH (`;` on Windows). A malformed PATH made the bundled
+    // xcrun unreachable as soon as another entry followed it.
+    : '$directory${windows ? ';' : ':'}$path';
+
 /// Result of building the aggregate Flutter-plugins Swift package.
 typedef SwiftPmDependencyRefEvaluator =
     Future<Map<String, String>> Function(
@@ -291,7 +302,8 @@ abstract final class GeneratedPluginsPackage {
       input.add(const [0]);
     }
 
-    add('xcross-swiftpm-build-v6');
+    // v7 invalidates dylibs compiled with availability guards disabled.
+    add('xcross-swiftpm-build-v7');
     add(objectiveCLinkerSwiftDriverArguments.join('\u0001'));
     if (Platform.isLinux) {
       add(objectiveCSmallStubSwiftDriverArguments.join('\u0001'));
@@ -466,7 +478,6 @@ abstract final class GeneratedPluginsPackage {
         environment: environment,
       );
     }
-    final targetBuildDir = resolveTargetBuildDir(scratchPath);
     final baseArguments = swiftBuildArguments(
       pluginsDir: pluginsDir,
       scratchPath: scratchPath,
@@ -488,6 +499,8 @@ abstract final class GeneratedPluginsPackage {
         label: 'swift build plan',
       ),
     );
+    // Inspect the plan just emitted, not a directory from an earlier build.
+    final targetBuildDir = resolveTargetBuildDir(scratchPath);
     await repairWindowsGeneratedBuildFiles(
       scratchPath,
       targetBuildDir,
@@ -1380,10 +1393,13 @@ abstract final class GeneratedPluginsPackage {
   }) async {
     final repair = repairConsumers ?? () async {};
 
-    Future<bool> recoverMissingTargets() async {
+    Future<bool> recoverMissingTargets({
+      bool includeObservedTargets = false,
+    }) async {
       final targets = missingSwiftInteropTargets(
         targetBuildDir,
         candidates: interopTargetCandidates,
+        includeObservedTargets: includeObservedTargets,
       );
       for (final target in targets) {
         await buildTarget(target);
@@ -1417,7 +1433,9 @@ abstract final class GeneratedPluginsPackage {
     try {
       await build();
     } on Object {
-      if (await recoverMissingTargets()) {
+      // A module map can expose a required internal target that is not one
+      // of the package's public products. Recover it only after a failed build.
+      if (await recoverMissingTargets(includeObservedTargets: true)) {
         await build();
         return;
       }
@@ -1436,6 +1454,7 @@ abstract final class GeneratedPluginsPackage {
   static List<String> missingSwiftInteropTargets(
     String targetBuildDir, {
     required Set<String> candidates,
+    bool includeObservedTargets = false,
   }) {
     final directory = Directory(targetBuildDir);
     if (!directory.existsSync()) return const [];
@@ -1468,7 +1487,9 @@ abstract final class GeneratedPluginsPackage {
           basename.length - '-Swift.h'.length,
         );
         if (reachable != null && !reachable.contains(target)) continue;
-        if (candidates.contains(target)) targets.add(target);
+        if (candidates.contains(target) || includeObservedTargets) {
+          targets.add(target);
+        }
       }
     }
     final sorted = targets.toList()..sort();
@@ -1626,9 +1647,17 @@ abstract final class GeneratedPluginsPackage {
   /// Process-local settings for SwiftPM dependency checkout: the
   /// non-interactive Git settings every host needs, plus the Windows
   /// symlink and sentry-cocoa source-build manifest lane.
-  static Map<String, String>? swiftProcessEnvironment({bool? windows}) {
+  static Map<String, String>? swiftProcessEnvironment({
+    bool? windows,
+    String? executable,
+    Map<String, String>? environment,
+  }) {
     final onWindows = windows ?? Platform.isWindows;
     final config = _gitConfigEntries(windows: onWindows);
+    final bundledTools = p.dirname(executable ?? Platform.resolvedExecutable);
+    final bundledXcrun = File(
+      p.join(bundledTools, onWindows ? 'xcrun.exe' : 'xcrun'),
+    );
     return {
       ...nonInteractiveGitEnvironment,
       'GIT_CONFIG_COUNT': '${config.length}',
@@ -1637,6 +1666,15 @@ abstract final class GeneratedPluginsPackage {
         'GIT_CONFIG_VALUE_$index': entry.value,
       },
       if (onWindows) 'EXPERIMENTAL_SPM_BUILDS': '1',
+      // SwiftPM build tools call `xcrun` through PATH. Prefer the xcrun
+      // bundled beside this executable over a separately installed version,
+      // which may not understand the iPhoneOS platform probes.
+      if (onWindows && bundledXcrun.existsSync())
+        'PATH': _prependPathEntry(
+          bundledTools,
+          (environment ?? Platform.environment)['PATH'],
+          windows: onWindows,
+        ),
     };
   }
 
@@ -2073,10 +2111,9 @@ abstract final class GeneratedPluginsPackage {
     '-F',
     '-Xcc',
     flutterFrameworkSlice,
-    '-Xswiftc',
-    '-Xfrontend',
-    '-Xswiftc',
-    '-disable-availability-checking',
+    // Preserve Swift #available runtime guards. Disabling availability checks
+    // also removes these guards and can call newer weak-linked APIs on older
+    // operating systems where those weak-linked APIs do not exist.
     // Swift uses clang as its link driver. Pin that driver too, otherwise a
     // macOS host reselects MacOSX.sdk while linking iOS plugin products.
     '-Xswiftc',
@@ -4939,26 +4976,18 @@ let package = Package(
       final kind = entry['kind'];
       final target = entry['target'];
       if (path is! String || kind is! String || target is! String) return false;
-      if (!_linkIntact(path, kind, target, entry['directory'] == true)) {
+      if (!_linkIntact(path, kind, target)) {
         return false;
       }
     }
     return true;
   }
 
-  static bool _linkIntact(
-    String path,
-    String kind,
-    String target,
-    bool directory,
-  ) {
+  static bool _linkIntact(String path, String kind, String target) {
     switch (kind) {
       case _stampKindSymlink:
         return FileSystemEntity.isLinkSync(path) &&
-            Link(path).targetSync() == target &&
-            (directory
-                ? Directory(path).existsSync()
-                : File(path).existsSync());
+            Link(path).targetSync() == target;
       case _stampKindForwarder:
         final file = File(path);
         return !FileSystemEntity.isLinkSync(path) &&
@@ -5036,12 +5065,19 @@ let package = Package(
       resolved[link] = resolve(link, <String>{});
     }
 
-    for (final link in links.keys) {
-      final target = resolved[link]!;
-      if (!Directory(target).existsSync() && !File(target).existsSync()) {
-        throw FlutterBuildError(
-          'Symlink target does not exist in SwiftPM checkout: $link -> $target',
-        );
+    // POSIX and Git permit dangling symlinks. Preserve them when the Windows
+    // host supports real links too: some dependency repositories retain links
+    // to optional examples that are not present at a tagged revision. The
+    // hard-link fallback cannot represent one, so it still needs a real target.
+    if (!symlinks) {
+      for (final link in links.keys) {
+        final target = resolved[link]!;
+        if (!Directory(target).existsSync() && !File(target).existsSync()) {
+          throw FlutterBuildError(
+            'Symlink target does not exist in SwiftPM checkout: $link -> '
+            '$target',
+          );
+        }
       }
     }
 
@@ -5089,9 +5125,8 @@ let package = Package(
     String linkText(String link) => Platform.isWindows
         ? targets[link]!.replaceAll('/', r'\')
         : targets[link]!;
-    bool isDirectory(String link) => Directory(resolved[link]!).existsSync();
     bool intact(String link) =>
-        _linkIntact(link, _stampKindSymlink, linkText(link), isDirectory(link));
+        _linkIntact(link, _stampKindSymlink, linkText(link));
 
     final pending = [
       for (final link in links.keys)
@@ -5102,7 +5137,6 @@ let package = Package(
         'path': link,
         'kind': _stampKindSymlink,
         'target': linkText(link),
-        'directory': isDirectory(link),
       });
     }
     if (pending.isEmpty) return false;
@@ -5246,7 +5280,7 @@ let package = Package(
           'kind': _stampKindForwarder,
           'target': forwarder,
         });
-        if (_linkIntact(link, _stampKindForwarder, forwarder, false)) continue;
+        if (_linkIntact(link, _stampKindForwarder, forwarder)) continue;
         replace.add(link);
         forwarders.add((link, forwarder));
       } else {
@@ -5255,7 +5289,7 @@ let package = Package(
           'kind': _stampKindHardLink,
           'target': targets[link],
         });
-        if (_linkIntact(link, _stampKindHardLink, targets[link]!, false)) {
+        if (_linkIntact(link, _stampKindHardLink, targets[link]!)) {
           continue;
         }
         replace.add(link);

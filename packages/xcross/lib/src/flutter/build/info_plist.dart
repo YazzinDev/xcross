@@ -125,6 +125,59 @@ abstract final class InfoPlist {
     return xml;
   }
 
+  /// Add the Debug-only local-network declarations Flutter's Xcode backend
+  /// writes into the produced app bundle for the Dart VM Service.
+  ///
+  /// xcross packs debug/JIT bundles without Xcode, so this mirrors
+  /// `xcode_backend.dart` rather than requiring every application template to
+  /// carry development-only permission text in its source Info.plist.
+  static String applyDebugVmServiceDiscovery(String plistXml) {
+    const service = '_dartVmService._tcp';
+    var xml = plistXml;
+    final services = RegExp(
+      r'(<key>NSBonjourServices</key>\s*<array[^>]*>)(.*?)(</array>)',
+      dotAll: true,
+    );
+    final existing = services.firstMatch(xml);
+    if (existing == null) {
+      final empty = RegExp(r'<key>NSBonjourServices</key>\s*<array\s*/>');
+      if (empty.hasMatch(xml)) {
+        xml = xml.replaceFirst(
+          empty,
+          '<key>NSBonjourServices</key>\n'
+          '\t<array>\n'
+          '\t\t<string>$service</string>\n'
+          '\t</array>',
+        );
+      } else {
+        xml = _insertBeforeEnd(
+          xml,
+          '\t<key>NSBonjourServices</key>\n'
+          '\t<array>\n'
+          '\t\t<string>$service</string>\n'
+          '\t</array>\n',
+        );
+      }
+    } else if (!existing.group(2)!.contains('<string>$service</string>')) {
+      xml = xml.replaceRange(
+        existing.start,
+        existing.end,
+        '${existing.group(1)}\n\t\t<string>$service</string>'
+        '${existing.group(2)}${existing.group(3)}',
+      );
+    }
+
+    if (!xml.contains('<key>NSLocalNetworkUsageDescription</key>')) {
+      xml = _insertBeforeEnd(
+        xml,
+        '\t<key>NSLocalNetworkUsageDescription</key>\n'
+        '\t<string>Allow Flutter tools on your computer to connect and debug '
+        'your application. This prompt will not appear on release builds.</string>\n',
+      );
+    }
+    return xml;
+  }
+
   /// Expand `$(KEY)` and `${KEY}` in [text] using [subs].
   static String expandVars(String text, Map<String, String> subs) {
     var result = text;
@@ -154,6 +207,23 @@ abstract final class InfoPlist {
       result[key] = value;
     }
     return result;
+  }
+
+  /// Reads Xcode configuration files in precedence order.
+  ///
+  /// Xcode's Debug.xcconfig includes Generated.xcconfig and then overrides its
+  /// settings. xcross does not run Xcode, so callers provide both files in
+  /// that same order when expanding the application Info.plist.
+  static Future<Map<String, String>> readXcconfigFiles(
+    Iterable<String> paths,
+  ) async {
+    final values = <String, String>{};
+    for (final path in paths) {
+      final file = File(path);
+      if (!file.existsSync()) continue;
+      values.addAll(parseXcconfig(await file.readAsString()));
+    }
+    return values;
   }
 
   /// Overwrite an existing `<key>K</key><string>…</string>` pair, or insert a

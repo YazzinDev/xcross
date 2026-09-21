@@ -13,15 +13,30 @@ const _fatMachOMagics = <int>{
   0xbfbafeca, // FAT_CIGAM_64
 };
 
-List<String> collectNativeAssetFrameworks(String outputDirectory) {
-  final directory = Directory(p.join(outputDirectory, 'native_assets'));
-  if (!directory.existsSync()) return <String>[];
-  return directory
-      .listSync()
-      .whereType<Directory>()
-      .where((entry) => entry.path.endsWith('.framework'))
-      .map((entry) => entry.path)
-      .toList();
+List<String> collectNativeAssetFrameworks(
+  String outputDirectory, {
+  String? projectRoot,
+}) {
+  // Flutter's iOS build hooks may write their framework products to the
+  // project build directory instead of the `flutter assemble -o` directory.
+  // Search both locations so those assets are embedded alongside App.framework.
+  final directories = <Directory>[
+    Directory(p.join(outputDirectory, 'native_assets')),
+    if (projectRoot != null)
+      Directory(p.join(projectRoot, 'build', 'native_assets', 'ios')),
+  ];
+  final frameworks = <String>{};
+  for (final directory in directories) {
+    if (!directory.existsSync()) continue;
+    frameworks.addAll(
+      directory
+          .listSync()
+          .whereType<Directory>()
+          .where((entry) => entry.path.endsWith('.framework'))
+          .map((entry) => entry.path),
+    );
+  }
+  return frameworks.toList();
 }
 
 Future<bool> isFatMachO(String path) async {
