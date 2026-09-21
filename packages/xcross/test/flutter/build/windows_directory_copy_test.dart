@@ -23,7 +23,7 @@ void main() {
   test(
     'normalizes extended drive directory sources without changing nodes',
     () {
-    final source = '${r'\\?\e:\'}${r'nested\' * 50}Example.framework';
+      final source = '${r'\\?\e:\'}${r'nested\' * 50}Example.framework';
       final original = plan(source);
       final result =
           GeneratedPluginsPackage.normalizeWindowsDirectoryCopyInputs(original);
