@@ -311,3 +311,33 @@ run used the reproduction bundle, not the full PR branch bundle. It retained
 the previously documented staged patches and remote-manifest override. No device
 launch or native Linux/macOS build was performed. Guard/documentation commits
 have not been pushed since the user's request to validate locally first.
+
+## Full PR-branch build validation (2026-09-22)
+
+The complete `codex/upstream-windows-ios` bundle was rebuilt from `bd94046`
+with `dart run tool/build_xcross.dart` in `packages/xcross`. Its executable SHA-256
+was `ac95e7db694de4b667591eb89b46a990cfa859fb7b07092705f439254f34ce35`.
+The subsequent `6c04567` changes only test formatting; runtime source is unchanged.
+
+Using this PR bundle (not the reproduction bundle), `xcross flutter build
+--dart-define-from-file=config/development.remote.env` completed with exit 0.
+SwiftPM finished in 8m22s, Runner compiled in 1.1s, and `app.app` was produced.
+The running SwiftPM invocation did not contain `-disable-availability-checking`.
+The previously failing FirebaseAuth, framework-copy and aggregate plugin phases
+were passed. No new device install, launch or hot-reload test was requested.
+
+The full focused PR suite now passes **229 tests**. Targeted analysis of all
+**27 changed Dart files** reports no issues, and all 27 pass formatting after
+the test-only correction. The user-owned untracked `.idea/` directory is untouched.
+
+This used the same isolated application copy, pub/xcross caches, installed SDK
+and disclosed local Sentry manifest override as the staged runs. Therefore it
+validates the complete PR runtime changes in that environment, **not** a clean
+unmodified-dependency build or native Linux/macOS compatibility. The override
+is not included in the PR. The previous intermittent Foundation diagnostic did
+not recur; this does not establish its cause or a dedicated fix for it.
+
+Raw evidence is retained locally as `stage-10-pr-branch.log` and copied to the
+ignored `build/reproduction-evidence/` directory. No private application logs or
+configuration are committed. All new preparation and validation commits remain
+local, as requested; no further GitHub push has been made.
