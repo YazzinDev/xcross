@@ -283,3 +283,21 @@ it is not published because it contains private application paths. This proves
 the compiler-launch fix, not completion of a new end-to-end app/device build.
 The cumulative app rerun is recorded separately as `stage-08-response-files.log`
 and retains the previously disclosed local-only remote-manifest override.
+
+Local follow-up guard (`6149791`, reproduction `f30afdd`): the response-file
+helper itself now returns before any filesystem access unless running on Windows,
+in addition to the existing Windows guard on its caller. The test-only host
+override verifies that a non-Windows invocation leaves YAML bytes unchanged and
+creates no response directory. The directory-copy rewrite remains inside the
+same Windows-only generated-file repair entry point; its string transformer has
+no filesystem side effects. The focused PR suite passes 118 tests. This is a
+simulated non-Windows branch test, not an actual Linux/macOS build.
+
+This guard is held locally pending complete application-build validation; no
+additional push is authorized before that validation is reviewed.
+
+The stage-8 cumulative app run subsequently failed during the `FirebaseAuth`
+prebuild with Swift exception 5 and a duplicate `Foundation` module diagnostic
+showing two visually identical PCM paths. Its cause is not yet established.
+The successful isolated aggregate compiler probe must not be presented as a
+successful full application build. The guard follow-up remains local.
