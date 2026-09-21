@@ -46,6 +46,12 @@ final class GdbReplyPacket {
     8 => 'SIGFPE',
     10 => 'SIGBUS',
     11 => 'SIGSEGV (bad memory access)',
+    0x91 => 'EXC_BAD_ACCESS (Mach memory fault)',
+    0x92 => 'EXC_BAD_INSTRUCTION',
+    0x93 => 'EXC_ARITHMETIC',
+    0x94 => 'EXC_EMULATION',
+    0x95 => 'EXC_SOFTWARE',
+    0x96 => 'EXC_BREAKPOINT',
     final int s => 'signal $s',
     null => 'unknown signal',
   };
@@ -110,7 +116,13 @@ final class GdbRemoteClient {
   /// Send the no-ack handshake.
   Future<void> start() async {
     await _sendRaw('+');
-    await _exchange('QStartNoAckMode');
+    final response = await _exchange('QStartNoAckMode');
+    // The response is still sent in acknowledgement mode. debugserver
+    // switches modes only after receiving this final acknowledgement.
+    await _sendRaw('+');
+    if (response != 'OK') {
+      throw TunnelError('debugproxy: no-ack mode rejected: $response');
+    }
     await _exchangeOptional('QThreadSuffixSupported');
     await _exchangeOptional('QListThreadsInStopReply');
   }

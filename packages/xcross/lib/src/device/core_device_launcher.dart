@@ -160,6 +160,12 @@ abstract final class CoreDeviceLauncher {
           recentDeviceLines: () => deviceLog?.tailLines ?? const [],
         );
         final consoleFuture = console.run();
+        // Attach leaves the app paused. Install the reply listener before
+        // resuming it: debugproxy may send its first nonfatal stop packet
+        // immediately after `c`, and a broadcast stream would otherwise lose
+        // that packet and leave the Debug engine paused forever.
+        await gdb.resume();
+        Log.logDone('Debugger attached');
         if (hotReload != null) Log.logInfo('Preparing hot reload…');
         final setupFuture = _trySpinUpHotReload(
           hotReload: hotReload,
@@ -211,9 +217,9 @@ abstract final class CoreDeviceLauncher {
     }
   }
 
-  /// ORDER MATTERS: connect -> start -> attach -> resume. The GDB client has a
-  /// single-slot exchange completer, so an RPC issued after resume() can be
-  /// hijacked by a stray stdout packet.
+  /// Connect and attach while the app is stopped. The caller installs its GDB
+  /// reply listener before it resumes the process, so no initial stop packet
+  /// can be lost between `c` and subscription.
   static Future<GdbRemoteClient> _attachDebugger({
     required DeviceEndpoint endpoint,
     required int pid,
@@ -223,12 +229,10 @@ abstract final class CoreDeviceLauncher {
       await gdb.connect();
       await gdb.start();
       await gdb.attach(pid);
-      await gdb.resume();
     } catch (e) {
       await gdb.close();
       throw XcrossError('Debugger attach failed: $e');
     }
-    Log.logDone('Debugger attached');
     return gdb;
   }
 

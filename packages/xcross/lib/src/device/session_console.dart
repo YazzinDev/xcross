@@ -19,6 +19,7 @@ final class SessionConsole {
     this.onRestartRequested,
     this.crashReason,
     this.recentDeviceLines,
+    this.listenForKeyboard = true,
   });
 
   /// Drain and keypress loops are already unwinding via [_stop] by the time we
@@ -44,6 +45,9 @@ final class SessionConsole {
   /// The app's last device-log lines, shown when a crash has no single
   /// recognisable reason line so the user still gets something to go on.
   final List<String> Function()? recentDeviceLines;
+
+  /// Whether the session reads interactive reload commands from stdin.
+  final bool listenForKeyboard;
 
   /// Why [hotReload] is null, shown when `r`/`R` are pressed anyway.
   ///
@@ -99,7 +103,9 @@ final class SessionConsole {
 
     try {
       final drainFuture = _drainGdbReplies();
-      final keypressFuture = _runKeypressLoop();
+      final keypressFuture = listenForKeyboard
+          ? _runKeypressLoop()
+          : Future<void>.value();
 
       await _stoppedCompleter.future;
       await drainFuture.timeout(_unwindTimeout, onTimeout: nothing);
@@ -161,6 +167,16 @@ final class SessionConsole {
               _reportCrash(reply.stopDescription);
               _stop();
               finish();
+            } else {
+              // Expected signal pauses need another continue. Mach memory
+              // faults (T91) are diagnosed above, never blindly resumed.
+              unawaited(
+                gdb.resume().catchError((Object error) {
+                  Log.logWarn('could not resume debugger after stop: $error');
+                  _stop();
+                  finish();
+                }),
+              );
             }
           case GdbReply.other:
             break;

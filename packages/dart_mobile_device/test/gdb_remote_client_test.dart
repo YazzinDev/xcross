@@ -136,6 +136,24 @@ void main() {
       expect(rawBytes.first, '+'.codeUnitAt(0));
       expect(requests, isNotEmpty);
       expect(requests.first, _frame('QStartNoAckMode'));
+      expect(
+        String.fromCharCodes(rawBytes),
+        contains(
+          '${_frame('QStartNoAckMode')}+${_frame('QThreadSuffixSupported')}',
+        ),
+      );
+    });
+
+    test('start() stops if no-ack mode is rejected', () async {
+      final (client, socket) = await connectClient();
+      final requests = <String>[];
+      final sub = _incomingFrames(socket).listen((frame) {
+        requests.add(frame);
+        socket.add(_frame('').codeUnits);
+      });
+      addTearDown(sub.cancel);
+      await expectLater(client.start(), throwsA(isA<TunnelError>()));
+      expect(requests, [_frame('QStartNoAckMode')]);
     });
 
     test('attach() resolves on a T/S stop reply', () async {
@@ -292,6 +310,13 @@ void _stopSignalTests() {
       const packet = GdbReplyPacket(GdbReply.stopped, 'T05thread:1;');
       expect(packet.stopSignal, 5);
       expect(packet.isFatalStop, isFalse);
+    });
+
+    test('reports Mach bad access as a fault, not an attach hand-off', () {
+      const packet = GdbReplyPacket(GdbReply.stopped, 'T91thread:1;');
+      expect(packet.stopSignal, 145);
+      expect(packet.isFatalStop, isTrue);
+      expect(packet.stopDescription, contains('EXC_BAD_ACCESS'));
     });
 
     test('ignores non-stop packets', () {

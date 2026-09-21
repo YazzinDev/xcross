@@ -26,6 +26,7 @@ void main() {
     expect(
       profile.argumentsForLaunch(isDap: true),
       containsAll([
+        '--enable-dart-profiling',
         '--vm-service-host=0.0.0.0',
         '--disable-service-auth-codes',
         '--start-paused',

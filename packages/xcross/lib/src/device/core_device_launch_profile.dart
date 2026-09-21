@@ -20,6 +20,10 @@ final class CoreDeviceLaunchProfile {
     bool ipv6VmService = false,
   }) => [
     if (_flutterRuntime && hotReload != null) ...[
+      // Flutter's iOS embedder refuses to create a Debug engine on iOS 14+
+      // unless the launch came from tooling. flutter_tools supplies this
+      // switch through ios-deploy/Xcode; CoreDevice needs it explicitly.
+      '--enable-dart-profiling',
       '--vm-service-host=${ipv6VmService ? '::0' : '0.0.0.0'}',
       '--vm-service-port=${TunnelConstants.vmServicePort}',
       '--disable-service-auth-codes',
