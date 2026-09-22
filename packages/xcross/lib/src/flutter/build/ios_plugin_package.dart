@@ -1488,13 +1488,10 @@ abstract final class GeneratedPluginsPackage {
   }) async {
     final repair = repairConsumers ?? () async {};
 
-    Future<bool> recoverMissingTargets({
-      bool includeObservedTargets = false,
-    }) async {
+    Future<bool> recoverMissingTargets({Set<String>? candidates}) async {
       final targets = missingSwiftInteropTargets(
         targetBuildDir,
-        candidates: interopTargetCandidates,
-        includeObservedTargets: includeObservedTargets,
+        candidates: candidates ?? interopTargetCandidates,
       );
       for (final target in targets) {
         await buildTarget(target);
@@ -1527,12 +1524,30 @@ abstract final class GeneratedPluginsPackage {
     final before = swiftInteropSearchPaths(targetBuildDir).toSet();
     try {
       await build();
-    } on Object {
-      // A module map can expose a required internal target that is not one
-      // of the package's public products. Recover it only after a failed build.
-      if (await recoverMissingTargets(includeObservedTargets: true)) {
-        await build();
-        return;
+    } on Object catch (error, stack) {
+      final diagnostic = error.toString();
+      final missingHeader = RegExp(
+        r'[A-Za-z_0-9-]+-Swift\.h[^\n]*(?:file not found|not found|No such file)',
+        caseSensitive: false,
+      ).hasMatch(diagnostic);
+      if (!missingHeader) rethrow;
+      // Internal targets may be absent from public products, but must still
+      // be reachable from the generated aggregate build plan.
+      final reachable = plannedTargetClosure(
+        targetBuildDir,
+        _pluginsProductName,
+      );
+      final candidates = {
+        ...interopTargetCandidates,
+        if (reachable != null) ...reachable,
+      };
+      try {
+        if (await recoverMissingTargets(candidates: candidates)) {
+          await build();
+          return;
+        }
+      } on Object {
+        Error.throwWithStackTrace(error, stack);
       }
       final emitted = swiftInteropSearchPaths(
         targetBuildDir,
@@ -1540,7 +1555,11 @@ abstract final class GeneratedPluginsPackage {
       if (!(windows ?? Platform.isWindows) || emitted.isEmpty) {
         rethrow;
       }
-      await repair();
+      try {
+        await repair();
+      } on Object {
+        Error.throwWithStackTrace(error, stack);
+      }
       await build();
     }
   }
@@ -1549,7 +1568,6 @@ abstract final class GeneratedPluginsPackage {
   static List<String> missingSwiftInteropTargets(
     String targetBuildDir, {
     required Set<String> candidates,
-    bool includeObservedTargets = false,
   }) {
     final directory = Directory(targetBuildDir);
     if (!directory.existsSync()) return const [];
@@ -1582,7 +1600,7 @@ abstract final class GeneratedPluginsPackage {
           basename.length - '-Swift.h'.length,
         );
         if (reachable != null && !reachable.contains(target)) continue;
-        if (candidates.contains(target) || includeObservedTargets) {
+        if (candidates.contains(target)) {
           targets.add(target);
         }
       }

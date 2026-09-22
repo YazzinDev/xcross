@@ -4072,7 +4072,9 @@ let package = Package(
           windows: true,
           build: () async {
             events.add('build${++attempts}');
-            if (attempts == 1) throw StateError('missing generated headers');
+            if (attempts == 1) {
+              throw StateError("'FirebaseAuth-Swift.h' file not found");
+            }
           },
           buildTarget: (target) async {
             events.add(target);
@@ -4090,6 +4092,34 @@ let package = Package(
           'repair',
           'build2',
         ]);
+      },
+    );
+
+    test(
+      'does not rebuild interop targets after an unrelated compile error',
+      () async {
+        final buildDir = p.join(tmp.path, 'arm64-apple-ios', 'debug');
+        final include = Directory(p.join(buildDir, 'Plugin.build', 'include'))
+          ..createSync(recursive: true);
+        File(
+          p.join(include.path, 'module.modulemap'),
+        ).writeAsStringSync('module Plugin { header "Plugin-Swift.h" }');
+        var attempts = 0;
+        await expectLater(
+          GeneratedPluginsPackage.buildWithInteropRecovery(
+            targetBuildDir: buildDir,
+            interopTargetCandidates: const {'Plugin'},
+            skipInitialRecovery: true,
+            windows: true,
+            build: () {
+              attempts++;
+              return Future.error(StateError('syntax error in user source'));
+            },
+            buildTarget: (_) async => fail('unrelated errors must not recover'),
+          ),
+          throwsA(isA<StateError>()),
+        );
+        expect(attempts, 1);
       },
     );
 
@@ -4133,7 +4163,7 @@ let package = Package(
             File(
               p.join(include.path, 'OtherSwift-Swift.h'),
             ).writeAsStringSync('generated');
-            throw StateError('interop consumer');
+            throw StateError("'OtherSwift-Swift.h' file not found");
           },
           buildTarget: (_) async => fail('no target should be prebuilt'),
           repairConsumers: () async => events.add('repair'),
