@@ -55,6 +55,78 @@ void main() {
     );
   });
 
+  test(
+    'stages a long Windows directory copy through a verified junction',
+    () async {
+      final scratch = await Directory.systemTemp.createTemp(
+        'xcross-copy-long-',
+      );
+      var source = p.join(scratch.path, 'vendor');
+      while (source.length < 265) {
+        source = p.join(source, 'nested-framework-source');
+      }
+      final extendedSource = r'\\?\' + source;
+      final directory = await Directory(extendedSource).create(recursive: true);
+      final sourceFile = File(p.join(directory.path, 'Info.plist'));
+      await sourceFile.writeAsString('framework');
+      String? alias;
+      addTearDown(() async {
+        if (alias != null &&
+            FileSystemEntity.typeSync(alias, followLinks: false) !=
+                FileSystemEntityType.notFound) {
+          final result = await Process.run(
+            Platform.environment['ComSpec'] ?? 'cmd.exe',
+            ['/c', 'rmdir', alias],
+          );
+          expect(result.exitCode, 0);
+        }
+        await scratch.delete(recursive: true);
+      });
+      final original = plan(extendedSource);
+      final staged =
+          await GeneratedPluginsPackage.stageWindowsDirectoryCopyInputs(
+            original,
+            scratch.path,
+            windows: true,
+          );
+      final decoded = jsonDecode(staged) as Map<String, dynamic>;
+      final commands = decoded['copyCommands'] as Map<String, dynamic>;
+      final command = commands['framework-copy'] as Map<String, dynamic>;
+      alias =
+          ((command['inputs'] as List<dynamic>).single
+                  as Map<String, dynamic>)['name']
+              as String;
+      expect(alias, isNot(extendedSource));
+      expect(p.isWithin(scratch.path, alias), isTrue);
+      expect(
+        await Directory(alias).resolveSymbolicLinks(),
+        p.normalize(source),
+      );
+      expect(File(p.join(alias, 'Info.plist')).readAsStringSync(), 'framework');
+      expect(
+        await GeneratedPluginsPackage.stageWindowsDirectoryCopyInputs(
+          staged,
+          scratch.path,
+          windows: true,
+        ),
+        staged,
+      );
+    },
+    skip: !Platform.isWindows,
+  );
+
+  test('long-path staging leaves non-Windows plans untouched', () async {
+    final original = plan(r'\\?\C:\very\long\Framework.framework');
+    expect(
+      await GeneratedPluginsPackage.stageWindowsDirectoryCopyInputs(
+        original,
+        r'C:\scratch',
+        windows: false,
+      ),
+      original,
+    );
+  });
+
   test('preserves ordinary paths, UNC paths, files and unrelated plans', () {
     for (final original in [
       plan(r'C:\Example.framework'),

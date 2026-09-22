@@ -4198,6 +4198,81 @@ let package = Package(
       },
     );
 
+    test('orders Windows interop dependencies before the aggregate', () async {
+      final buildDir = p.join(tmp.path, 'arm64-apple-ios', 'debug');
+      final headers = {
+        for (final target in [
+          'Aux',
+          'FlutterPluginsGenerated',
+          'SentrySwift',
+          'sentry_flutter',
+        ])
+          target: p.join(
+            buildDir,
+            '$target.build',
+            'include',
+            '$target-Swift.h',
+          ),
+      };
+      Directory(buildDir).createSync(recursive: true);
+      File(p.join(buildDir, 'description.json')).writeAsStringSync(
+        jsonEncode({
+          'swiftCommands': {
+            for (final entry in headers.entries)
+              entry.key: {
+                'otherArguments': ['-emit-objc-header-path', entry.value],
+              },
+          },
+          'targetDependencyMap': {
+            'FlutterPluginsGenerated': ['sentry_flutter', 'Aux'],
+            'sentry_flutter': ['SentrySwift'],
+            'SentrySwift': <String>[],
+            'Aux': <String>[],
+          },
+        }),
+      );
+      final planned = GeneratedPluginsPackage.plannedSwiftInteropTargets(
+        buildDir,
+        candidates: headers.keys.toSet(),
+      );
+      expect(planned, [
+        'Aux',
+        'FlutterPluginsGenerated',
+        'SentrySwift',
+        'sentry_flutter',
+      ]);
+      expect(
+        GeneratedPluginsPackage.orderedWindowsSwiftInteropTargets(
+          buildDir,
+          planned,
+        ),
+        ['Aux', 'SentrySwift', 'sentry_flutter'],
+      );
+      final events = <String>[];
+      await GeneratedPluginsPackage.buildWithInteropRecovery(
+        targetBuildDir: buildDir,
+        interopTargetCandidates: headers.keys.toSet(),
+        windows: true,
+        skipInitialRecovery: true,
+        buildTarget: (target) async {
+          events.add('target:$target');
+          final header = File(headers[target]!);
+          await header.parent.create(recursive: true);
+          await header.writeAsString('generated');
+        },
+        build: () async {
+          expect(File(headers['SentrySwift']!).existsSync(), isTrue);
+          events.add('build');
+        },
+      );
+      expect(events, [
+        'target:Aux',
+        'target:SentrySwift',
+        'target:sentry_flutter',
+        'build',
+      ]);
+    });
+
     test('rejects missing and malformed Swift planning descriptions', () {
       final buildDir = p.join(tmp.path, 'arm64-apple-ios', 'debug');
       Directory(buildDir).createSync(recursive: true);

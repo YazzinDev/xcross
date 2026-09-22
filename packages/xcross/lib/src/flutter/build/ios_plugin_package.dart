@@ -624,6 +624,11 @@ abstract final class GeneratedPluginsPackage {
       var normalized = original.replaceAll(r'\\\\?\\C:\\?\\C:\\', r'C:\\');
       if (p.basename(json.path) == 'description.json') {
         normalized = normalizeWindowsDirectoryCopyInputs(normalized);
+        normalized = await stageWindowsDirectoryCopyInputs(
+          normalized,
+          scratchPath,
+          windows: true,
+        );
       }
       if (normalized != original) {
         await json.writeAsString(normalized);
@@ -795,6 +800,98 @@ abstract final class GeneratedPluginsPackage {
     return changed
         ? const JsonEncoder.withIndent('  ').convert(decoded)
         : description;
+  }
+
+  /// Foundation's copy command cannot read some extended-length directory
+  /// inputs on Windows. Present only those inputs through a short junction
+  /// inside this build's scratch directory; vendor sources stay unchanged.
+  @visibleForTesting
+  static Future<String> stageWindowsDirectoryCopyInputs(
+    String description,
+    String scratchPath, {
+    bool? windows,
+  }) async {
+    if (!(windows ?? Platform.isWindows)) return description;
+    final decoded = jsonDecode(description);
+    if (decoded is! Map<String, dynamic>) return description;
+    final commands = decoded['copyCommands'];
+    if (commands is! Map<String, dynamic>) return description;
+    var changed = false;
+    for (final command in commands.values) {
+      if (command is! Map<String, dynamic>) continue;
+      final inputs = command['inputs'];
+      if (inputs is! List<dynamic>) continue;
+      for (final input in inputs) {
+        if (input is! Map<String, dynamic> || input['kind'] != 'directory') {
+          continue;
+        }
+        final name = input['name'];
+        if (name is! String ||
+            !name.startsWith(r'\\?\') ||
+            !RegExp(r'^[a-zA-Z]:\\').hasMatch(name.substring(4))) {
+          continue;
+        }
+        final source = name.substring(4);
+        if (_windowsCopyTreeFitsLegacyPaths(source)) continue;
+        if (!Directory(name).existsSync()) continue;
+        final digest = sha256.convert(utf8.encode(p.windows.normalize(source)));
+        final alias = p.join(
+          scratchPath,
+          '.xcross-copy-inputs',
+          digest.toString().substring(0, 24),
+        );
+        await _ensureWindowsDirectoryCopyAlias(alias, source);
+        if (!_windowsCopyTreeFitsLegacyPaths(alias)) {
+          throw FlutterBuildError(
+            'SwiftPM directory copy path remains too long after staging: $alias',
+          );
+        }
+        input['name'] = alias;
+        changed = true;
+      }
+    }
+    return changed
+        ? const JsonEncoder.withIndent('  ').convert(decoded)
+        : description;
+  }
+
+  static Future<void> _ensureWindowsDirectoryCopyAlias(
+    String alias,
+    String source,
+  ) async {
+    final target = p.windows.normalize(
+      await Directory(source).resolveSymbolicLinks(),
+    );
+    final aliasDirectory = Directory(alias);
+    if (FileSystemEntity.typeSync(alias, followLinks: false) ==
+        FileSystemEntityType.notFound) {
+      await aliasDirectory.parent.create(recursive: true);
+      final result = await ProcessRunner.run(
+        await ProcessRunner.locateTool('cmd.exe'),
+        ['/c', 'mklink', '/J', alias, target],
+      );
+      if (result.exitCode != 0 &&
+          FileSystemEntity.typeSync(alias, followLinks: false) ==
+              FileSystemEntityType.notFound) {
+        throw FlutterBuildError(
+          'Could not stage long SwiftPM directory copy: ${result.stderr}',
+        );
+      }
+    }
+    final mount = await ProcessRunner.run(
+      await ProcessRunner.locateTool('fsutil.exe'),
+      ['reparsepoint', 'query', alias],
+    );
+    if (mount.exitCode != 0 ||
+        !isWindowsMountPointReparseOutput(mount.stdout) ||
+        !p.windows.equals(
+          await aliasDirectory.resolveSymbolicLinks(),
+          target,
+        )) {
+      throw FlutterBuildError(
+        'Refusing a changed SwiftPM directory copy alias: $alias',
+      );
+    }
   }
 
   static bool _windowsCopyTreeFitsLegacyPaths(String root) {
@@ -1577,7 +1674,10 @@ abstract final class GeneratedPluginsPackage {
       targetBuildDir,
       candidates: interopTargetCandidates,
     );
-    for (final target in planned) {
+    final prebuild = (windows ?? Platform.isWindows)
+        ? orderedWindowsSwiftInteropTargets(targetBuildDir, planned)
+        : planned;
+    for (final target in prebuild) {
       await buildTarget(target);
     }
     await repair();
@@ -2078,6 +2178,53 @@ abstract final class GeneratedPluginsPackage {
     }
     final sorted = targets.toList()..sort();
     return sorted;
+  }
+
+  /// The aggregate target is the build that follows this prepass, never a
+  /// prebuild target. Build reachable Swift dependencies before consumers
+  /// even when alphabetical names would schedule them in reverse.
+  @visibleForTesting
+  static List<String> orderedWindowsSwiftInteropTargets(
+    String targetBuildDir,
+    List<String> planned,
+  ) {
+    final eligible = planned.toSet()..remove(_pluginsProductName);
+    final description = File(p.join(targetBuildDir, 'description.json'));
+    Map<String, dynamic>? dependencies;
+    try {
+      final decoded = jsonDecode(description.readAsStringSync());
+      if (decoded is Map<String, dynamic>) {
+        dependencies = decoded['targetDependencyMap'] as Map<String, dynamic>?;
+      }
+    } on Object {
+      // Preserve the prepass for older SwiftPM descriptions with no map.
+    }
+    final ordered = <String>[];
+    final visited = <String>{};
+    final visiting = <String>{};
+
+    void visit(String target) {
+      if (!eligible.contains(target) || visited.contains(target)) return;
+      if (!visiting.add(target)) {
+        throw FlutterBuildError(
+          'SwiftPM interop target dependency cycle at $target',
+        );
+      }
+      final children = dependencies?[target];
+      if (children is List) {
+        for (final dependency in children.whereType<String>()) {
+          visit(dependency);
+        }
+      }
+      visiting.remove(target);
+      visited.add(target);
+      ordered.add(target);
+    }
+
+    for (final target in planned) {
+      visit(target);
+    }
+    return ordered;
   }
 
   /// [root] and every target reachable from it in the plan's dependency map.
