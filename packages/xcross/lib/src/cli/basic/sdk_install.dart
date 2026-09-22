@@ -162,13 +162,8 @@ abstract final class SdkInstall {
 
     if (materializeLinks ?? Platform.isWindows) {
       await _materializeSdkLinks(root, links, onProgress: onLinkProgress);
-      // Copies of SDK aliases look like distinct SDKs to platform discovery.
-      // Materialize first: either side of the alias can hold the actual data.
-      for (final alias in materializedSdkAliases(root, links)) {
-        if (Directory(ioPath(alias)).existsSync()) {
-          await Directory(ioPath(alias)).delete(recursive: true);
-        }
-      }
+      // Keep both names: callers may reference the canonical iPhoneOS.sdk
+      // directly even when discovery prefers its versioned counterpart.
     } else {
       var linked = 0;
       for (final link in links.entries) {

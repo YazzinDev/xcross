@@ -102,7 +102,7 @@ void main() {
 
   for (final versionedLink in [false, true]) {
     test(
-      'retains SDK contents before removing a copied alias ($versionedLink)',
+      'retains SDK contents under both names ($versionedLink)',
       () async {
         const sdks = 'Developer/Platforms/iPhoneOS.platform/Developer/SDKs';
         final real = versionedLink ? 'iPhoneOS.sdk' : 'iPhoneOS26.0.sdk';
@@ -122,11 +122,16 @@ void main() {
           materializeLinks: true,
         );
         final base = p.joinAll([root.path, ...sdks.split('/')]);
-        expect(Directory(p.join(base, 'iPhoneOS.sdk')).existsSync(), isFalse);
+        expect(Directory(p.join(base, 'iPhoneOS.sdk')).existsSync(), isTrue);
         expect(
           File(
             p.join(base, 'iPhoneOS26.0.sdk', 'usr', 'include', 'link.h'),
           ).readAsStringSync(),
+          'header',
+        );
+        expect(
+          File(p.join(base, 'iPhoneOS.sdk', 'usr', 'include', 'link.h'))
+              .readAsStringSync(),
           'header',
         );
       },
