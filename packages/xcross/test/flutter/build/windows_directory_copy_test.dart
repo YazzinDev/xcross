@@ -23,7 +23,7 @@ void main() {
   test(
     'normalizes extended drive directory sources without changing nodes',
     () {
-      final source = '${r'\\?\e:\'}${r'nested\' * 50}Example.framework';
+      final source = '${r'\\?\e:\'}${r'nested\' * 20}Example.framework';
       final original = plan(source);
       final result =
           GeneratedPluginsPackage.normalizeWindowsDirectoryCopyInputs(original);
@@ -45,6 +45,15 @@ void main() {
       );
     },
   );
+
+  test('retains extended paths when the source exceeds MAX_PATH', () {
+    final source = '${r'\\?\e:\'}${r'nested\' * 50}Example.framework';
+    final original = plan(source);
+    expect(
+      GeneratedPluginsPackage.normalizeWindowsDirectoryCopyInputs(original),
+      original,
+    );
+  });
 
   test('preserves ordinary paths, UNC paths, files and unrelated plans', () {
     for (final original in [

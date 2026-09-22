@@ -652,7 +652,7 @@ abstract final class GeneratedPluginsPackage {
     return changed;
   }
 
-  /// llbuild's shell commands bypass Swift's driver-side response-file fallback.
+  /// llbuild's shell commands bypass compiler response-file fallback.
   /// Keep the generated graph intact, replacing only oversized compiler argv.
   @visibleForTesting
   static Future<bool> repairWindowsSwiftResponseFiles(
@@ -674,20 +674,21 @@ abstract final class GeneratedPluginsPackage {
           continue;
         }
         final args = decoded.cast<String>();
-        if (args.isEmpty ||
-            !{
-              'swiftc',
-              'swiftc.exe',
-            }.contains(p.windows.basename(args.first).toLowerCase()) ||
-            args.join(' ').length < 28000) {
+        if (args.isEmpty) continue;
+        final tool = p.windows.basename(args.first).toLowerCase();
+        final swift = {'swiftc', 'swiftc.exe'}.contains(tool);
+        final clang = {
+          'clang',
+          'clang.exe',
+          'clang++',
+          'clang++.exe',
+        }.contains(tool);
+        if ((!swift && !clang) || windowsCommandLineLength(args) < 28000) {
           continue;
         }
         final contents = args
             .skip(1)
-            .map(
-              (arg) =>
-                  '"${arg.replaceAllMapped(RegExp(r'(\\*)"'), (match) => '${match[1]}${match[1]}\\"').replaceAllMapped(RegExp(r'\\+$'), (match) => '${match[0]}${match[0]}')}"',
-            )
+            .map(swift ? _quoteWindowsArgument : _quoteGnuArgument)
             .join('\n');
         final digest = sha256.convert(utf8.encode(contents));
         final file = File(
@@ -699,6 +700,13 @@ abstract final class GeneratedPluginsPackage {
         }
         lines[i] =
             '$prefix${jsonEncode([args.first, '@${p.absolute(file.path)}'])}';
+        if (windowsCommandLineLength([
+              args.first,
+              '@${p.absolute(file.path)}',
+            ]) >=
+            32767) {
+          throw FlutterBuildError('Compiler response-file path is too long');
+        }
         repaired = true;
       }
       if (repaired) {
@@ -706,8 +714,55 @@ abstract final class GeneratedPluginsPackage {
         changed = true;
       }
     }
+    await _pruneWindowsResponseFiles(scratchPath);
     return changed;
   }
+
+  static Future<void> _pruneWindowsResponseFiles(String scratchPath) async {
+    final cache = Directory(p.join(scratchPath, '.xcross-response'));
+    if (!cache.existsSync()) return;
+    final referenced = <String>{};
+    for (final plan in Directory(scratchPath).listSync().whereType<File>()) {
+      if (p.extension(plan.path) != '.yaml') continue;
+      for (final line in await plan.readAsLines()) {
+        const prefix = '    args: ';
+        if (!line.startsWith('$prefix[')) continue;
+        final Object? decoded;
+        try {
+          decoded = jsonDecode(line.substring(prefix.length));
+        } on FormatException {
+          continue;
+        }
+        if (decoded is! List) continue;
+        for (final argument in decoded.whereType<String>()) {
+          if (!argument.startsWith('@')) continue;
+          final file = p.normalize(argument.substring(1));
+          if (p.isWithin(cache.path, file)) referenced.add(file);
+        }
+      }
+    }
+    final cutoff = DateTime.now().subtract(const Duration(days: 7));
+    for (final file in cache.listSync().whereType<File>()) {
+      final name = p.basename(file.path);
+      if (!RegExp(r'^[a-f0-9]{64}\.rsp$').hasMatch(name) ||
+          referenced.contains(p.normalize(file.path)) ||
+          !file.lastModifiedSync().isBefore(cutoff)) {
+        continue;
+      }
+      await file.delete();
+    }
+  }
+
+  /// Conservative CreateProcess length in UTF-16 units, including the NUL.
+  @visibleForTesting
+  static int windowsCommandLineLength(List<String> arguments) =>
+      arguments.map(_quoteWindowsArgument).join(' ').length + 1;
+
+  static String _quoteWindowsArgument(String argument) =>
+      '"${argument.replaceAllMapped(RegExp(r'(\\*)"'), (match) => '${match[1]}${match[1]}\\"').replaceAllMapped(RegExp(r'\\+$'), (match) => '${match[0]}${match[0]}')}"';
+
+  static String _quoteGnuArgument(String argument) =>
+      '"${argument.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}"';
 
   /// Foundation's directory copy mishandles extended drive paths as file URLs
   /// on Windows. Keep llbuild's node identities intact and normalize only the
@@ -730,7 +785,8 @@ abstract final class GeneratedPluginsPackage {
         final name = input['name'];
         if (name is String &&
             name.startsWith(r'\\?\') &&
-            RegExp(r'^[a-zA-Z]:\\').hasMatch(name.substring(4))) {
+            RegExp(r'^[a-zA-Z]:\\').hasMatch(name.substring(4)) &&
+            _windowsCopyTreeFitsLegacyPaths(name.substring(4))) {
           input['name'] = name.substring(4);
           changed = true;
         }
@@ -739,6 +795,15 @@ abstract final class GeneratedPluginsPackage {
     return changed
         ? const JsonEncoder.withIndent('  ').convert(decoded)
         : description;
+  }
+
+  static bool _windowsCopyTreeFitsLegacyPaths(String root) {
+    if (root.length >= 260) return false;
+    final directory = Directory(root);
+    if (!directory.existsSync()) return true;
+    return directory
+        .listSync(recursive: true, followLinks: false)
+        .every((entry) => entry.path.length < 260);
   }
 
   /// Swift reports a toolchain/SDK ABI mismatch once per importing file and
