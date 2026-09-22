@@ -227,8 +227,15 @@ abstract final class InfoPlist {
     String arch = 'arm64',
   }) {
     final values = <String, String>{};
+    final comments = _XcconfigComments();
     for (final line in text.split('\n')) {
-      _applyXcconfigAssignment(line, values, configuration, sdk, arch);
+      _applyXcconfigAssignment(
+        comments.strip(line),
+        values,
+        configuration,
+        sdk,
+        arch,
+      );
     }
     return _expandXcconfigValues(values);
   }
@@ -258,18 +265,21 @@ abstract final class InfoPlist {
         throw FormatException('xcconfig include cycle at $resolved');
       }
       try {
+        final comments = _XcconfigComments();
         for (final raw in await file.readAsLines()) {
-          final line = raw.trim();
+          final line = comments.strip(raw).trim();
           final include = RegExp(
-            r'^#include(\?)?\s+"([^"]+)"\s*$',
+            r'^#include(\?)?\s+(?:"([^"]+)"|<([^>]+)>)\s*$',
           ).firstMatch(line);
           if (include != null) {
             await read(
-              p.normalize(p.join(p.dirname(resolved), include[2])),
+              p.normalize(
+                p.join(p.dirname(resolved), include[2] ?? include[3]),
+              ),
               optional: include[1] == '?',
             );
           } else {
-            _applyXcconfigAssignment(raw, values, configuration, sdk, arch);
+            _applyXcconfigAssignment(line, values, configuration, sdk, arch);
           }
         }
       } finally {
@@ -584,4 +594,37 @@ abstract final class InfoPlist {
       '\t</array>\n'
       '</dict>\n'
       '</plist>\n';
+}
+
+/// Removes C-style comments without mistaking quoted values for comments.
+/// The state belongs to one xcconfig file so a block may span several lines.
+final class _XcconfigComments {
+  bool _inBlock = false;
+
+  String strip(String line) {
+    final result = StringBuffer();
+    var quoted = false;
+    var escaped = false;
+    for (var index = 0; index < line.length; index++) {
+      final character = line[index];
+      final next = index + 1 < line.length ? line[index + 1] : '';
+      if (_inBlock) {
+        if (character == '*' && next == '/') {
+          _inBlock = false;
+          index++;
+        }
+        continue;
+      }
+      if (!quoted && character == '/' && next == '*') {
+        _inBlock = true;
+        result.write(' ');
+        index++;
+        continue;
+      }
+      result.write(character);
+      if (character == '"' && !escaped) quoted = !quoted;
+      escaped = character == r'\' && !escaped;
+    }
+    return result.toString();
+  }
 }
