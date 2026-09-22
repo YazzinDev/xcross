@@ -221,6 +221,12 @@ let package = Package(
 
       expect(manifest, contains('name: "FlutterPluginsGenerated"'));
       expect(manifest, contains('.iOS("15.6")'));
+      expect(
+        manifest,
+        contains(
+          '.unsafeFlags(["-Xfrontend", "-disable-availability-checking"])',
+        ),
+      );
       expect(manifest, isNot(contains('.iOS("13.0")')));
       expect(
         manifest,

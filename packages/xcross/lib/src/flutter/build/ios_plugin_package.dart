@@ -5891,7 +5891,13 @@ $dependencies    ],
         .target(
             name: "$_pluginsProductName",
             dependencies: [
-$targetDependencies            ]
+$targetDependencies            ],
+            // Only this generated target calls plugin classes whose API
+            // availability may exceed the application's deployment target.
+            // Dependency targets keep normal availability checks and guards.
+            swiftSettings: [
+                .unsafeFlags(["-Xfrontend", "-disable-availability-checking"])
+            ]
         )
     ]
 )
