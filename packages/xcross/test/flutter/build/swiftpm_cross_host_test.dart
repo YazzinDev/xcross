@@ -62,7 +62,9 @@ void main() {
           windows: windows,
           build: () async {
             events.add('build');
-            if (++attempts == 1) throw StateError('generated header missing');
+            if (++attempts == 1) {
+              throw StateError("'Internal-Swift.h' file not found");
+            }
           },
           buildTarget: (target) async {
             events.add(target);
@@ -82,7 +84,16 @@ void main() {
     File(
       p.join(include, 'module.modulemap'),
     ).writeAsStringSync('module Internal { header "Internal-Swift.h" }');
+    File(p.join(root.path, 'description.json')).writeAsStringSync(
+      jsonEncode({
+        'targetDependencyMap': {
+          'FlutterPluginsGenerated': ['Internal'],
+          'Internal': <String>[],
+        },
+      }),
+    );
     final targetError = StateError('target compilation failed');
+    final originalError = StateError("'Internal-Swift.h' file not found");
     var builds = 0;
     await expectLater(
       GeneratedPluginsPackage.buildWithInteropRecovery(
@@ -91,11 +102,11 @@ void main() {
         windows: true,
         build: () {
           builds++;
-          return Future<void>.error(StateError('missing generated header'));
+          return Future<void>.error(originalError);
         },
         buildTarget: (_) async => throw targetError,
       ),
-      throwsA(same(targetError)),
+      throwsA(same(originalError)),
     );
     expect(builds, 1);
   });
