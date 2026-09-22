@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+import 'package:xml/xml.dart';
 import 'package:xcross/src/flutter/build/info_plist.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
 import 'package:xcross/src/flutter/constants.dart';
@@ -456,6 +457,36 @@ BAZ = a=b
       expect(result, contains('<key>NSBonjourServices</key>'));
       expect(result, contains('<string>_dartVmService._tcp</string>'));
       expect(result, contains('<key>NSLocalNetworkUsageDescription</key>'));
+    });
+  });
+
+  group('debug discovery plist structure', () {
+    test('keeps a following array separate from an empty service array', () {
+      const source = '''<plist version="1.0"><dict>
+<key>NSBonjourServices</key><array />
+<key>UISupportedInterfaceOrientations</key><array><string>Portrait</string></array>
+<key>Nested</key><dict><key>NSBonjourServices</key><array/></dict>
+</dict></plist>''';
+      final result = InfoPlist.applyDebugVmServiceDiscovery(source);
+      final dict = XmlDocument.parse(result).rootElement.getElement('dict')!;
+      final entries = dict.childElements.toList();
+      expect(entries[1].name.local, 'array');
+      expect(entries[1].childElements.single.innerText, '_dartVmService._tcp');
+      expect(entries[3].childElements.single.innerText, 'Portrait');
+      expect(entries[5].getElement('array')!.childElements, isEmpty);
+      for (var i = 0; i < entries.length; i += 2) {
+        expect(entries[i].name.local, 'key');
+      }
+      expect(InfoPlist.applyDebugVmServiceDiscovery(result), result);
+    });
+
+    test('rejects an invalid service value instead of duplicating its key', () {
+      expect(
+        () => InfoPlist.applyDebugVmServiceDiscovery(
+          '<plist><dict><key>NSBonjourServices</key><string>invalid</string></dict></plist>',
+        ),
+        throwsFormatException,
+      );
     });
   });
 

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:xml/xml.dart';
 import 'package:xcross/src/flutter/build/internal/required_plist_key.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
 import 'package:xcross/src/flutter/constants.dart';
@@ -133,49 +134,73 @@ abstract final class InfoPlist {
   /// carry development-only permission text in its source Info.plist.
   static String applyDebugVmServiceDiscovery(String plistXml) {
     const service = '_dartVmService._tcp';
-    var xml = plistXml;
-    final services = RegExp(
-      r'(<key>NSBonjourServices</key>\s*<array[^>]*>)(.*?)(</array>)',
-      dotAll: true,
-    );
-    final existing = services.firstMatch(xml);
-    if (existing == null) {
-      final empty = RegExp(r'<key>NSBonjourServices</key>\s*<array\s*/>');
-      if (empty.hasMatch(xml)) {
-        xml = xml.replaceFirst(
-          empty,
-          '<key>NSBonjourServices</key>\n'
-          '\t<array>\n'
-          '\t\t<string>$service</string>\n'
-          '\t</array>',
-        );
-      } else {
-        xml = _insertBeforeEnd(
-          xml,
-          '\t<key>NSBonjourServices</key>\n'
-          '\t<array>\n'
-          '\t\t<string>$service</string>\n'
-          '\t</array>\n',
-        );
+    final document = XmlDocument.parse(plistXml);
+    final root = document.rootElement.getElement('dict');
+    if (root == null)
+      throw const FormatException('Info.plist has no root dict');
+
+    XmlElement? valueFor(String name) {
+      final entries = root.childElements.toList();
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].name.local == 'key' && entries[i].innerText == name) {
+          if (i + 1 >= entries.length || entries[i + 1].name.local == 'key') {
+            throw FormatException('Info.plist key $name has no value');
+          }
+          return entries[i + 1];
+        }
       }
-    } else if (!existing.group(2)!.contains('<string>$service</string>')) {
-      xml = xml.replaceRange(
-        existing.start,
-        existing.end,
-        '${existing.group(1)}\n\t\t<string>$service</string>'
-        '${existing.group(2)}${existing.group(3)}',
-      );
+      return null;
     }
 
-    if (!xml.contains('<key>NSLocalNetworkUsageDescription</key>')) {
-      xml = _insertBeforeEnd(
-        xml,
-        '\t<key>NSLocalNetworkUsageDescription</key>\n'
-        '\t<string>Allow Flutter tools on your computer to connect and debug '
-        'your application. This prompt will not appear on release builds.</string>\n',
+    final currentServices = valueFor('NSBonjourServices');
+    if (currentServices != null && currentServices.name.local != 'array') {
+      throw const FormatException('NSBonjourServices must be an array');
+    }
+    final currentUsage = valueFor('NSLocalNetworkUsageDescription');
+    if (currentUsage != null && currentUsage.name.local != 'string') {
+      throw const FormatException(
+        'NSLocalNetworkUsageDescription must be a string',
       );
     }
-    return xml;
+    if (currentServices?.childElements.any(
+              (entry) =>
+                  entry.name.local == 'string' && entry.innerText == service,
+            ) ==
+            true &&
+        currentUsage != null) {
+      return plistXml;
+    }
+
+    final services = currentServices ?? XmlElement(XmlName('array'));
+    if (currentServices == null) {
+      root.children.add(
+        XmlElement(XmlName('key'), [], [XmlText('NSBonjourServices')]),
+      );
+      root.children.add(services);
+    }
+    if (!services.childElements.any(
+      (entry) => entry.name.local == 'string' && entry.innerText == service,
+    )) {
+      services.children.add(
+        XmlElement(XmlName('string'), [], [XmlText(service)]),
+      );
+    }
+    if (currentUsage == null) {
+      root.children.add(
+        XmlElement(XmlName('key'), [], [
+          XmlText('NSLocalNetworkUsageDescription'),
+        ]),
+      );
+      root.children.add(
+        XmlElement(XmlName('string'), [], [
+          XmlText(
+            'Allow Flutter tools on your computer to connect and debug '
+            'your application. This prompt will not appear on release builds.',
+          ),
+        ]),
+      );
+    }
+    return document.toXmlString();
   }
 
   /// Expand `$(KEY)` and `${KEY}` in [text] using [subs].
