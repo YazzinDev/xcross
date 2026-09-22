@@ -538,6 +538,27 @@ void main() {
   });
 
   group('runChecked', () {
+    test('retains diagnostics when echoing subprocess output', () async {
+      final directory = Directory.systemTemp.createTempSync('xcross-echo-');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final script = File(p.join(directory.path, 'fail.dart'))
+        ..writeAsStringSync(
+          "import 'dart:io'; void main() { stderr.writeln('missing-Swift.h file not found'); exit(1); }",
+        );
+      await expectLater(
+        ProcessRunner.runChecked(Platform.resolvedExecutable, [
+          script.path,
+        ], captureAndEcho: true),
+        throwsA(
+          isA<CliError>().having(
+            (error) => error.message,
+            'message',
+            contains('missing-Swift.h file not found'),
+          ),
+        ),
+      );
+    });
+
     test(
       'throws CliError with the command line embedded on a non-zero exit',
       () async {

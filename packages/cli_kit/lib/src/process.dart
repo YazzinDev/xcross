@@ -240,13 +240,15 @@ abstract final class ProcessRunner {
   ///
   /// With [tail], output streams into that step's tail and stdin is forwarded
   /// unless [forwardStdin] is false. With [inheritStdio], the child shares
-  /// this process's stdio. Otherwise output is captured into the error.
+  /// this process's stdio. [captureAndEcho] shows output live while retaining
+  /// it for the error. Otherwise output is captured into the error.
   static Future<void> runChecked(
     String executable,
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
     bool inheritStdio = false,
+    bool captureAndEcho = false,
     String? label,
     Step? tail,
     bool forwardStdin = true,
@@ -265,6 +267,15 @@ abstract final class ProcessRunner {
         environment: environment,
         tail: tail,
         forwardStdin: forwardStdin,
+        timeout: timeout,
+      );
+    }
+    if (captureAndEcho) {
+      return _runCapturedStreaming(
+        executable,
+        arguments,
+        workingDirectory: workingDirectory,
+        environment: environment,
         timeout: timeout,
       );
     }
@@ -395,6 +406,50 @@ abstract final class ProcessRunner {
     throw CliError(
       _failureMessage(executable, arguments, result.exitCode, output: output),
     );
+  }
+
+  static Future<void> _runCapturedStreaming(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
+  }) async {
+    final process = await Process.start(
+      _resolvedExecutable(executable),
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: _childEnvironment(environment),
+      includeParentEnvironment: _inheritParentEnvironment,
+    );
+    final captured = StringBuffer();
+    final drained = Future.wait([
+      process.stdout.transform(const Utf8Decoder(allowMalformed: true)).forEach(
+        (chunk) {
+          captured.write(chunk);
+          stdout.write(chunk);
+        },
+      ),
+      process.stderr.transform(const Utf8Decoder(allowMalformed: true)).forEach(
+        (chunk) {
+          captured.write(chunk);
+          stderr.write(chunk);
+        },
+      ),
+    ]);
+    await process.stdin.close();
+    final code = await _awaitExitWithin(
+      process,
+      timeout,
+      executable,
+      arguments,
+    );
+    await drained;
+    if (code != 0) {
+      throw CliError(
+        _failureMessage(executable, arguments, code, output: '$captured'),
+      );
+    }
   }
 
   static Future<void> _runWithTail(
