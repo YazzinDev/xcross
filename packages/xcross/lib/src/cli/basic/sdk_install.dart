@@ -64,7 +64,12 @@ abstract final class SdkInstall {
   static String? sdkRelativePath(String name) {
     final archiveName = name.replaceAll(r'\', '/');
     for (final file in sdkIncludedFiles) {
-      if (archiveName == file || archiveName.endsWith('/$file')) return file;
+      if (archiveName == file) return file;
+      final anchor = '/$file';
+      final first = archiveName.indexOf('/Developer/');
+      if (first >= 0 && archiveName.indexOf(anchor, first) == first) {
+        return file;
+      }
     }
     for (final root in sdkIncludedRoots) {
       if (archiveName == root || archiveName.startsWith('$root/')) {
@@ -96,6 +101,7 @@ abstract final class SdkInstall {
     await Directory(ioPath(root)).create(recursive: true);
     final links = <String, String>{};
     final hardLinks = HardLinkPayloads();
+    final descriptors = <String, String>{};
     var written = 0;
     var patchedStubs = 0;
 
@@ -109,6 +115,17 @@ abstract final class SdkInstall {
       );
       final destPath = _destinationPath(root, entry);
       if (destPath == null) continue;
+      if (sdkIncludedFiles.any(
+        (file) => destPath.endsWith(file.replaceAll('/', p.separator)),
+      )) {
+        final previous = descriptors[destPath];
+        if (previous != null && previous != entry.name) {
+          throw XcrossError(
+            'Conflicting SDK descriptor entries: $previous and ${entry.name}',
+          );
+        }
+        descriptors[destPath] = entry.name;
+      }
 
       // Text stubs are rewritten on the way in rather than in a pass over
       // the installed tree: the bytes here are the hard-link group's shared

@@ -23,7 +23,42 @@ void main() {
       ),
       isNull,
     );
+    expect(
+      SdkInstall.sdkRelativePath(
+        'Xcode.app/Contents/Developer/Other/Developer/Platforms/iPhoneOS.platform/Info.plist',
+      ),
+      isNull,
+    );
   });
+
+  test(
+    'rejects duplicate descriptors before the later entry overwrites',
+    () async {
+      const descriptor = 'Developer/Platforms/iPhoneOS.platform/Info.plist';
+      CpioEntry entry(String name, String contents) => CpioEntry(
+        name: name,
+        mode: 0x81a4,
+        data: Uint8List.fromList(utf8.encode(contents)),
+      );
+      await expectLater(
+        SdkInstall.writeSdkEntries(
+          Stream.fromIterable([
+            entry('Xcode.app/Contents/$descriptor', 'first'),
+            entry('DeviceSupport/Xcode.app/Contents/$descriptor', 'second'),
+          ]),
+          root.path,
+          materializeLinks: true,
+        ),
+        throwsA(isA<Exception>()),
+      );
+      expect(
+        File(
+          p.joinAll([root.path, ...descriptor.split('/')]),
+        ).readAsStringSync(),
+        'first',
+      );
+    },
+  );
 
   for (final platform in [
     'iPhoneOS',
