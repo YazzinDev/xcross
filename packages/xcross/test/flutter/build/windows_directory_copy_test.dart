@@ -59,7 +59,7 @@ void main() {
     'stages a long Windows directory copy through a verified junction',
     () async {
       final scratch = await Directory.systemTemp.createTemp(
-        'xcross-copy-long-',
+        "xcross&%TEMP%'[copy]-long-",
       );
       var source = p.join(scratch.path, 'vendor');
       while (source.length < 265) {
@@ -74,11 +74,8 @@ void main() {
         if (alias != null &&
             FileSystemEntity.typeSync(alias, followLinks: false) !=
                 FileSystemEntityType.notFound) {
-          final result = await Process.run(
-            Platform.environment['ComSpec'] ?? 'cmd.exe',
-            ['/c', 'rmdir', alias],
-          );
-          expect(result.exitCode, 0);
+          await Directory(alias).delete();
+          expect(sourceFile.existsSync(), isTrue);
         }
         await scratch.delete(recursive: true);
       });
@@ -126,6 +123,36 @@ void main() {
       original,
     );
   });
+
+  test(
+    'removing scratch does not remove a junction target',
+    () async {
+      final fixture = await Directory.systemTemp.createTemp(
+        'xcross-copy-safe-',
+      );
+      final scratch = await Directory.systemTemp.createTemp('xcross-scratch-');
+      addTearDown(() async {
+        if (scratch.existsSync()) await scratch.delete(recursive: true);
+        if (fixture.existsSync()) await fixture.delete(recursive: true);
+      });
+      var source = p.join(fixture.path, 'vendor');
+      while (source.length < 265) {
+        source = p.join(source, 'nested-framework-source');
+      }
+      await Directory(r'\\?\' + source).create(recursive: true);
+      final sentinel = File(p.join(r'\\?\' + source, 'keep.txt'));
+      await sentinel.writeAsString('keep');
+
+      await GeneratedPluginsPackage.stageWindowsDirectoryCopyInputs(
+        plan(r'\\?\' + source),
+        scratch.path,
+        windows: true,
+      );
+      await scratch.delete(recursive: true);
+      expect(sentinel.readAsStringSync(), 'keep');
+    },
+    skip: !Platform.isWindows,
+  );
 
   test('preserves ordinary paths, UNC paths, files and unrelated plans', () {
     for (final original in [

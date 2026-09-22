@@ -866,9 +866,19 @@ abstract final class GeneratedPluginsPackage {
     if (FileSystemEntity.typeSync(alias, followLinks: false) ==
         FileSystemEntityType.notFound) {
       await aliasDirectory.parent.create(recursive: true);
+      // PowerShell receives the paths as quoted literals, unlike cmd /c
+      // mklink, which expands %NAME% and interprets & in user directory names.
+      // New-Item treats brackets in the target as wildcard syntax.
+      String literal(String path) => "'${path.replaceAll("'", "''")}'";
+      final literalTarget = target.replaceAll('[', '`[').replaceAll(']', '`]');
       final result = await ProcessRunner.run(
-        await ProcessRunner.locateTool('cmd.exe'),
-        ['/c', 'mklink', '/J', alias, target],
+        await ProcessRunner.locateTool('powershell.exe'),
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'New-Item -ItemType Junction -Path ${literal(alias)} -Target ${literal(literalTarget)} | Out-Null',
+        ],
       );
       if (result.exitCode != 0 &&
           FileSystemEntity.typeSync(alias, followLinks: false) ==
@@ -1673,6 +1683,7 @@ abstract final class GeneratedPluginsPackage {
     final planned = plannedSwiftInteropTargets(
       targetBuildDir,
       candidates: interopTargetCandidates,
+      windows: windows,
     );
     final prebuild = (windows ?? Platform.isWindows)
         ? orderedWindowsSwiftInteropTargets(targetBuildDir, planned)
@@ -2135,6 +2146,7 @@ abstract final class GeneratedPluginsPackage {
   static List<String> plannedSwiftInteropTargets(
     String targetBuildDir, {
     required Set<String> candidates,
+    bool? windows,
   }) {
     // The plan is an optimisation for the prepass, not a requirement: without
     // it the existing after-the-fact recovery still runs. A build directory
@@ -2165,13 +2177,15 @@ abstract final class GeneratedPluginsPackage {
       final target = owner.substring(0, owner.length - '.build'.length);
       // A generated aggregate may reach an internal Swift target through a
       // product even though that target is not itself a public product.
-      if (!candidates.contains(target) &&
-          (reachable == null || !reachable.contains(target))) {
+      // A null closure means the plan carried no dependency map. On Windows,
+      // include internal targets absent from the public-product candidates;
+      // otherwise the aggregate can race SentrySwift on older SwiftPM plans.
+      // Keep the existing candidate filter on POSIX hosts.
+      if (reachable == null &&
+          !(windows ?? Platform.isWindows) &&
+          !candidates.contains(target)) {
         continue;
       }
-      // A null closure means the plan carried no dependency map to filter
-      // with, so fall back to the unfiltered set rather than skipping the
-      // prepass and reintroducing the race.
       if (reachable != null && !reachable.contains(target)) continue;
       if (File(p.join(argument, '$target-Swift.h')).existsSync()) continue;
       targets.add(target);

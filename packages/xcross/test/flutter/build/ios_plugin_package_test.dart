@@ -3978,7 +3978,7 @@ let package = Package(
             buildDir,
             candidates: const {'FirebaseFirestore', 'FirebaseAuth'},
           ),
-          ['FirebaseAuth', 'FirebaseFirestore'],
+          ['FirebaseAuth', 'FirebaseFirestore', 'Unrelated'],
         );
 
         File(headers[1]).parent.createSync(recursive: true);
@@ -3988,7 +3988,7 @@ let package = Package(
             buildDir,
             candidates: const {'FirebaseFirestore', 'FirebaseAuth'},
           ),
-          ['FirebaseFirestore'],
+          ['FirebaseFirestore', 'Unrelated'],
           reason: 'a header already on disk needs no prebuild',
         );
       },
@@ -4110,6 +4110,49 @@ let package = Package(
           candidates: const {'Reachable'},
         ),
         ['Reachable'],
+      );
+    });
+
+    test('prebuilds internal headers without a dependency map', () {
+      final buildDir = p.join(tmp.path, 'legacy-no-map');
+      final header = p.join(
+        buildDir,
+        'SentrySwift.build',
+        'include',
+        'SentrySwift-Swift.h',
+      );
+      Directory(buildDir).createSync(recursive: true);
+      File(p.join(buildDir, 'description.json')).writeAsStringSync(
+        jsonEncode({
+          'swiftCommands': {
+            'SentrySwift': {
+              'otherArguments': ['-emit-objc-header-path', header],
+            },
+          },
+        }),
+      );
+
+      expect(
+        GeneratedPluginsPackage.plannedSwiftInteropTargets(
+          buildDir,
+          candidates: const {'sentry_flutter'},
+        ),
+        ['SentrySwift'],
+      );
+      expect(
+        GeneratedPluginsPackage.plannedSwiftInteropTargets(
+          buildDir,
+          candidates: const {'sentry_flutter'},
+          windows: false,
+        ),
+        isEmpty,
+        reason: 'keep the legacy POSIX candidate filter',
+      );
+      expect(
+        GeneratedPluginsPackage.orderedWindowsSwiftInteropTargets(buildDir, [
+          'SentrySwift',
+        ]),
+        ['SentrySwift'],
       );
     });
 
@@ -4418,6 +4461,10 @@ let package = Package(
                   p.join(include.path, 'OtherSwift-Swift.h'),
                 ],
               },
+            },
+            'targetDependencyMap': {
+              'FlutterPluginsGenerated': <String>[],
+              'OtherSwift': <String>[],
             },
           }),
         );
