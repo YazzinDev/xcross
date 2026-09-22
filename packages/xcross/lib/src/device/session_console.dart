@@ -67,6 +67,10 @@ final class SessionConsole {
   /// Prevents overlapping reload/restart operations.
   bool _busy = false;
 
+  final Map<String, int> _resumedStops = {};
+  bool _resumePending = false;
+  static const _maxAutomaticResumes = 8;
+
   Completer<void>? _keypressDone;
 
   bool get _stopped => _stoppedCompleter.isCompleted;
@@ -163,19 +167,29 @@ final class SessionConsole {
             // stopped, not gone. Ignoring it (the old behaviour) left the
             // app frozen on a black screen with no output at all, which is
             // indistinguishable from a hang. Report it and end the session.
-            if (reply.isFatalStop) {
+            final repeated = _resumedStops[reply.stopIdentity] ?? 0;
+            if (reply.isFatalStop ||
+                repeated > 0 ||
+                _resumedStops.length >= _maxAutomaticResumes ||
+                _resumePending) {
               _reportCrash(reply.stopDescription);
               _stop();
               finish();
             } else {
-              // Expected signal pauses need another continue. Mach memory
-              // faults (T91) are diagnosed above, never blindly resumed.
+              // A bare SIGTRAP can be the attach hand-off. A second stop at
+              // the same point is a trap and must be reported, not resumed.
+              _resumedStops[reply.stopIdentity] = repeated + 1;
+              _resumePending = true;
               unawaited(
-                gdb.resume().catchError((Object error) {
-                  Log.logWarn('could not resume debugger after stop: $error');
-                  _stop();
-                  finish();
-                }),
+                gdb.resume().then(
+                  (_) => _resumePending = false,
+                  onError: (Object error, StackTrace stack) {
+                    _resumePending = false;
+                    Log.logWarn('could not resume debugger after stop: $error');
+                    _stop();
+                    finish();
+                  },
+                ),
               );
             }
           case GdbReply.other:

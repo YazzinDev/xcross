@@ -312,6 +312,23 @@ void _stopSignalTests() {
       expect(packet.isFatalStop, isFalse);
     });
 
+    test('reports a Mach breakpoint trap instead of resuming it', () {
+      const packet = GdbReplyPacket(
+        GdbReply.stopped,
+        'T05thread:1;reason:exception;metype:6;medata:1;',
+      );
+      expect(packet.isFatalStop, isTrue);
+      expect(packet.stopFields['metype'], '6');
+    });
+
+    test('reports unknown and malformed stops', () {
+      expect(
+        const GdbReplyPacket(GdbReply.stopped, 'T00thread:1;').isFatalStop,
+        isTrue,
+      );
+      expect(const GdbReplyPacket(GdbReply.stopped, 'T').isFatalStop, isTrue);
+    });
+
     test('reports Mach bad access as a fault, not an attach hand-off', () {
       const packet = GdbReplyPacket(GdbReply.stopped, 'T91thread:1;');
       expect(packet.stopSignal, 145);

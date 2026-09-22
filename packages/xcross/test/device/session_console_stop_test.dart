@@ -72,6 +72,43 @@ void main() {
     expect(console.isStopped, isTrue);
     expect(received.toString(), isNot(contains(r'$c#63')));
   });
+
+  test(
+    'reports a repeated SIGTRAP without sending a second continue',
+    () async {
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      final accepted = server.first;
+      final gdb = GdbRemoteClient(host: '127.0.0.1', port: server.port);
+      await gdb.connect();
+      addTearDown(gdb.close);
+      final socket = await accepted;
+      addTearDown(socket.destroy);
+      final received = StringBuffer();
+      final firstContinue = Completer<void>();
+      socket.listen((bytes) {
+        received.write(String.fromCharCodes(bytes));
+        if (!firstContinue.isCompleted &&
+            received.toString().contains(r'$c#63')) {
+          firstContinue.complete();
+        }
+      });
+      final console = SessionConsole(
+        gdb: gdb,
+        hotReload: null,
+        listenForKeyboard: false,
+      );
+      final run = console.run();
+      socket.add(_frame('T05thread:1;pc:100;').codeUnits);
+      await socket.flush();
+      await firstContinue.future.timeout(const Duration(seconds: 2));
+      socket.add(_frame('T05thread:1;pc:100;').codeUnits);
+      await socket.flush();
+      await run.timeout(const Duration(seconds: 2));
+      expect(console.isStopped, isTrue);
+      expect(RegExp(r'\$c#63').allMatches(received.toString()), hasLength(1));
+    },
+  );
 }
 
 String _frame(String payload) {

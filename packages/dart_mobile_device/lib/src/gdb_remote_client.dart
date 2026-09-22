@@ -38,6 +38,28 @@ final class GdbReplyPacket {
     return int.tryParse(payload.substring(1, 3), radix: 16);
   }
 
+  /// Key/value details in a debugserver T stop reply. S replies have no fields.
+  Map<String, String> get stopFields {
+    if (type != GdbReply.stopped || payload.length < 4 || payload[0] != 'T') {
+      return const {};
+    }
+    final fields = <String, String>{};
+    for (final part in payload.substring(3).split(';')) {
+      final separator = part.indexOf(':');
+      if (separator > 0) {
+        fields[part.substring(0, separator)] = part.substring(separator + 1);
+      }
+    }
+    return fields;
+  }
+
+  /// A repeated stop at the same execution point must not be resumed forever.
+  String get stopIdentity {
+    final fields = stopFields;
+    return '${stopSignal ?? 'unknown'}:${fields['thread'] ?? ''}:'
+        '${fields['pc'] ?? fields['20'] ?? payload}';
+  }
+
   /// Human name for [stopSignal], for the signals a launch actually hits.
   String get stopDescription => switch (stopSignal) {
     4 => 'SIGILL',
@@ -51,16 +73,16 @@ final class GdbReplyPacket {
     0x93 => 'EXC_ARITHMETIC',
     0x94 => 'EXC_EMULATION',
     0x95 => 'EXC_SOFTWARE',
-    0x96 => 'EXC_BREAKPOINT',
     final int s => 'signal $s',
     null => 'unknown signal',
   };
 
-  /// Whether this stop is a fatal fault rather than a debugger-expected
-  /// pause. SIGTRAP is how the debugger's own breakpoints report, so it must
-  /// not be treated as a crash.
+  /// Whether this stop is a fault rather than an expected debugger pause.
+  /// A bare first SIGTRAP may be an attach hand-off; a Mach exception is not.
   bool get isFatalStop => switch (stopSignal) {
-    null || 5 || 0 => false,
+    null => type == GdbReply.stopped,
+    5 =>
+      stopFields.containsKey('metype') || stopFields['reason'] == 'exception',
     _ => true,
   };
 

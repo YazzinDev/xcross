@@ -26,7 +26,6 @@ void main() {
     expect(
       profile.argumentsForLaunch(isDap: true),
       containsAll([
-        '--enable-dart-profiling',
         '--vm-service-host=0.0.0.0',
         '--disable-service-auth-codes',
         '--start-paused',
@@ -34,6 +33,10 @@ void main() {
         '--verify-entry-points',
         '--route=/home',
       ]),
+    );
+    expect(
+      profile.argumentsForLaunch(isDap: true),
+      isNot(contains('--enable-dart-profiling')),
     );
   });
 
