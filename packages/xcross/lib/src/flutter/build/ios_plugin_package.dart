@@ -2741,6 +2741,7 @@ abstract final class GeneratedPluginsPackage {
       return (pins: <String, String>{}, originals: <String, String>{});
     }
     final originals = <String, String>{};
+    final rewrites = <String, String>{};
     final pins = <String, String>{};
     final replacements = <String, String>{};
     String? git;
@@ -2759,11 +2760,18 @@ abstract final class GeneratedPluginsPackage {
         // Do not substitute a range with an arbitrary version. SwiftPM must
         // still solve any future non-exact constraint itself.
         if (version == null) continue;
+        final identity = _canonicalGitUrl(dependency.url);
+        final previousVersion = pins[identity];
+        if (previousVersion != null && previousVersion != version) {
+          throw FlutterBuildError(
+            'Conflicting exact Sentry versions: $previousVersion and $version',
+          );
+        }
         final destination = p.join(
           vendorDir,
           vendorPackageDirName(dependency.url, version),
         );
-        if (!replacements.containsKey(dependency.url)) {
+        if (!replacements.containsKey(identity)) {
           git ??= await ProcessRunner.locateTool('git');
           await (clonePackage ?? _cloneGitPackage)(
             git,
@@ -2775,19 +2783,29 @@ abstract final class GeneratedPluginsPackage {
             destination,
             consumedProducts: const {'Sentry'},
           );
-          replacements[dependency.url] = destination;
-          pins[_canonicalGitUrl(dependency.url)] = version;
+          replacements[identity] = destination;
+          pins[identity] = version;
         }
         rewritten = rewritten.replaceAll(
           dependency.match,
           '.package(name: "${dependency.identity}", '
-          'path: "${_swiftPath(destination)}")',
+          'path: "${_swiftPath(replacements[identity]!)}")',
         );
       }
       if (rewritten != original) {
         originals[manifestFile.path] = original;
-        await _writeStable(manifestFile.path, rewritten);
+        rewrites[manifestFile.path] = rewritten;
       }
+    }
+    try {
+      for (final entry in rewrites.entries) {
+        await _writeStable(entry.key, entry.value);
+      }
+    } on Object {
+      for (final entry in originals.entries) {
+        await _writeStable(entry.key, entry.value);
+      }
+      rethrow;
     }
     return (pins: pins, originals: originals);
   }

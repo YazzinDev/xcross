@@ -437,7 +437,11 @@ abstract final class ProcessRunner {
         },
       ),
     ]);
-    await process.stdin.close();
+    // A fast-failing child can close its pipe before we do. Keep its captured
+    // compiler diagnostic as the failure instead of a broken-pipe exception.
+    try {
+      await process.stdin.close();
+    } on Object catch (_) {}
     final code = await _awaitExitWithin(
       process,
       timeout,

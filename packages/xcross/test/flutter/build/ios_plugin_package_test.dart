@@ -1548,6 +1548,74 @@ let env = getenv("EXPERIMENTAL_SPM_BUILDS")
       );
     });
 
+    test(
+      'rejects conflicting exact Sentry versions without rewriting',
+      () async {
+        final first = Directory(p.join(tmp.path, 'sentry-first'))..createSync();
+        final second = Directory(p.join(tmp.path, 'sentry-second'))
+          ..createSync();
+        final firstManifest = File(p.join(first.path, 'Package.swift'))
+          ..writeAsStringSync(
+            '.package(url: "https://github.com/getsentry/sentry-cocoa", '
+            'exact: "8.58.3")',
+          );
+        final secondManifest = File(p.join(second.path, 'Package.swift'))
+          ..writeAsStringSync(
+            '.package(url: "https://github.com/getsentry/sentry-cocoa.git", '
+            'exact: "8.59.0")',
+          );
+        final original = firstManifest.readAsStringSync();
+        await expectLater(
+          GeneratedPluginsPackage.bootstrapWindowsSentryResolve(
+            [first.path, second.path],
+            p.join(tmp.path, 'vendor'),
+            windows: true,
+            clonePackage: (_, _, _, destination) async {
+              await Directory(destination).create(recursive: true);
+              await File(
+                p.join(destination, 'Package.swift'),
+              ).writeAsString('import PackageDescription');
+            },
+          ),
+          throwsA(isA<FlutterBuildError>()),
+        );
+        expect(firstManifest.readAsStringSync(), original);
+        expect(secondManifest.readAsStringSync(), contains('8.59.0'));
+      },
+    );
+
+    test('leaves staged manifests intact when a later clone fails', () async {
+      final first = Directory(p.join(tmp.path, 'sentry-one'))..createSync();
+      final second = Directory(p.join(tmp.path, 'sentry-two'))..createSync();
+      File(p.join(first.path, 'Package.swift')).writeAsStringSync(
+        '.package(url: "https://github.com/getsentry/sentry-cocoa", '
+        'exact: "8.58.3")',
+      );
+      File(p.join(second.path, 'Package.swift')).writeAsStringSync(
+        '.package(url: "https://example.com/other/sentry-cocoa", '
+        'exact: "8.58.3")',
+      );
+      final firstFile = File(p.join(first.path, 'Package.swift'));
+      final original = firstFile.readAsStringSync();
+      var clones = 0;
+      await expectLater(
+        GeneratedPluginsPackage.bootstrapWindowsSentryResolve(
+          [first.path, second.path],
+          p.join(tmp.path, 'vendor'),
+          windows: true,
+          clonePackage: (_, _, _, destination) async {
+            if (++clones == 2) throw StateError('clone failed');
+            await Directory(destination).create(recursive: true);
+            await File(
+              p.join(destination, 'Package.swift'),
+            ).writeAsString('import PackageDescription');
+          },
+        ),
+        throwsStateError,
+      );
+      expect(firstFile.readAsStringSync(), original);
+    });
+
     test('retries resolve once and preserves failed cache semantics', () async {
       final package = Directory(p.join(tmp.path, 'package'))..createSync();
       final resolved = File(p.join(package.path, 'Package.resolved'));
