@@ -143,7 +143,6 @@ final class FlutterPacker {
       flutterRoot,
       deploymentTarget: deploymentTarget,
       pluginsLibrary: pluginsBuild?.libraryPath,
-      nativeAssetFrameworks: nativeAssets.frameworks,
       verbose: Log.isVerbose,
     );
 
@@ -392,7 +391,6 @@ final class FlutterPacker {
     required IosDeploymentTarget deploymentTarget,
     required bool verbose,
     String? pluginsLibrary,
-    List<String> nativeAssetFrameworks = const [],
   }) async {
     final xcframework = IosEngineCache(
       flutterRoot: flutterRoot,
@@ -413,7 +411,6 @@ final class FlutterPacker {
       outputDir: p.join(projectRoot, 'build', 'xcross-flutter-runner-bin'),
       deploymentTarget: deploymentTarget,
       pluginsLibrary: pluginsLibrary,
-      nativeAssetFrameworks: nativeAssetFrameworks,
       verbose: verbose,
     );
 

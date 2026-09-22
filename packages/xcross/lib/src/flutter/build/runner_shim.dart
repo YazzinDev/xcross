@@ -26,8 +26,6 @@ final class RunnerShim {
   ///                        into it for plugin registration instead of using
   ///                        an empty local stub, and it's linked directly
   ///                        into the Runner binary.
-  /// [nativeAssetFrameworks] — Frameworks emitted by Dart build hooks, linked
-  ///                        so native plugin imports can resolve their exports.
   ///
   /// Returns path to the linked `Runner` executable.
   static Future<String> buildRunnerBinary({
@@ -38,7 +36,6 @@ final class RunnerShim {
     required IosDeploymentTarget deploymentTarget,
     String? pluginsLibrary,
     bool verbose = false,
-    List<String> nativeAssetFrameworks = const [],
   }) => Log.logStep('Compiling Runner', () async {
     final clang = await DarwinSdk.resolveDarwinClang(sdk);
     final iosSdk = _resolveIPhoneOsSDK(sdk);
@@ -79,7 +76,6 @@ final class RunnerShim {
       sdkVersion: sdkVersion,
       deploymentTarget: deploymentTarget,
       pluginsLibrary: pluginsLibrary,
-      nativeAssetFrameworks: nativeAssetFrameworks,
     );
 
     if (!File(outputPath).existsSync()) {
@@ -165,7 +161,6 @@ final class RunnerShim {
     required String sdkVersion,
     required IosDeploymentTarget deploymentTarget,
     String? pluginsLibrary,
-    List<String> nativeAssetFrameworks = const [],
   }) async {
     Log.logTrace('[ld64.lld] link Runner.o → Runner');
     // An SDK whose text stubs still declare an architecture this linker
@@ -185,7 +180,6 @@ final class RunnerShim {
           sdkVersion: sdkVersion,
           deploymentTarget: deploymentTarget,
           pluginsLibrary: pluginsLibrary,
-          nativeAssetFrameworks: nativeAssetFrameworks,
         ),
         inheritStdio: Log.isVerbose,
         label: 'ld64.lld',
@@ -203,7 +197,6 @@ final class RunnerShim {
     required String sdkVersion,
     required IosDeploymentTarget deploymentTarget,
     String? pluginsLibrary,
-    List<String> nativeAssetFrameworks = const [],
   }) => [
     '-arch',
     'arm64',
@@ -217,14 +210,6 @@ final class RunnerShim {
     outputPath,
     objectPath,
     if (pluginsLibrary != null) pluginsLibrary,
-    for (final directory in nativeAssetFrameworks.map(p.dirname).toSet()) ...[
-      '-F',
-      directory,
-    ],
-    for (final framework in nativeAssetFrameworks) ...[
-      '-framework',
-      p.basenameWithoutExtension(framework),
-    ],
     '-F',
     flutterSlice,
     '-F',

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -5,6 +6,7 @@ import 'package:cli_kit/cli_kit.dart';
 import 'package:path/path.dart' as p;
 import 'package:xcross/src/flutter/build/macho_dylib_rewriter.dart';
 import 'package:xcross/src/flutter/build/macho_linkedit_aligner.dart';
+import 'package:xcross/src/flutter/errors.dart';
 
 const _fatMachOMagics = <int>{
   0xcafebabe, // FAT_MAGIC
@@ -14,29 +16,73 @@ const _fatMachOMagics = <int>{
 };
 
 List<String> collectNativeAssetFrameworks(
+  String manifest,
   String outputDirectory, {
   String? projectRoot,
 }) {
-  // Flutter's iOS build hooks may write their framework products to the
-  // project build directory instead of the `flutter assemble -o` directory.
-  // Search both locations so those assets are embedded alongside App.framework.
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(manifest);
+  } on FormatException catch (error) {
+    throw FlutterBuildError('Invalid native assets manifest: $error');
+  }
+  if (decoded is! Map<String, dynamic> ||
+      decoded['native-assets'] is! Map<String, dynamic>) {
+    throw FlutterBuildError(
+      'Invalid native assets manifest: missing native-assets',
+    );
+  }
+  final targets = decoded['native-assets'] as Map<String, dynamic>;
+  final assets = targets['ios_arm64'];
+  if (assets == null) return const [];
+  if (assets is! Map<String, dynamic>) {
+    throw FlutterBuildError(
+      'Invalid native assets manifest: ios_arm64 is not a map',
+    );
+  }
   final directories = <Directory>[
     Directory(p.join(outputDirectory, 'native_assets')),
     if (projectRoot != null)
       Directory(p.join(projectRoot, 'build', 'native_assets', 'ios')),
   ];
-  final frameworks = <String>{};
-  for (final directory in directories) {
-    if (!directory.existsSync()) continue;
-    frameworks.addAll(
-      directory
-          .listSync()
-          .whereType<Directory>()
-          .where((entry) => entry.path.endsWith('.framework'))
-          .map((entry) => entry.path),
-    );
+  final frameworks = <String, String>{};
+  for (final asset in assets.values) {
+    if (asset is! List || asset.length < 2 || asset[1] is! String) continue;
+    if (asset[0] != 'absolute' && asset[0] != 'relative') continue;
+    final path = (asset[1] as String).replaceAll(r'\', '/');
+    final component = path
+        .split('/')
+        .lastIndexWhere((part) => part.endsWith('.framework'));
+    if (component < 0) continue;
+    final frameworkPath = path.split('/').take(component + 1).join('/');
+    final candidates = p.isAbsolute(frameworkPath)
+        ? [frameworkPath]
+        : [
+            for (final directory in directories)
+              p.normalize(p.join(directory.path, frameworkPath)),
+          ];
+    final found = candidates
+        .where((path) => Directory(path).existsSync())
+        .toList();
+    if (found.isEmpty) {
+      throw FlutterBuildError(
+        'Native asset framework not found: $frameworkPath',
+      );
+    }
+    if (found.length > 1 && !p.equals(found.first, found.last)) {
+      throw FlutterBuildError(
+        'Native asset framework is ambiguous: $frameworkPath',
+      );
+    }
+    final selected = found.single;
+    final name = p.basename(selected);
+    final previous = frameworks[name];
+    if (previous != null && !p.equals(previous, selected)) {
+      throw FlutterBuildError('Native asset framework name collision: $name');
+    }
+    frameworks[name] = selected;
   }
-  return frameworks.toList();
+  return frameworks.values.toList();
 }
 
 Future<bool> isFatMachO(String path) async {

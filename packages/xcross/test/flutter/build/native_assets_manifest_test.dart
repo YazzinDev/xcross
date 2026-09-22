@@ -57,4 +57,17 @@ void main() {
     const empty = '{"format-version":[1,0,0],"native-assets":{}}';
     expect(normalizeIosNativeAssetsManifest(empty), empty);
   });
+
+  test('leaves unknown or malformed shapes to the manifest validator', () {
+    for (final source in [
+      '{}',
+      '[]',
+      '{"native-assets":null}',
+      '{"native-assets":{"ios_arm64":null}}',
+      '{"native-assets":{"ios_arm64":[]}}',
+      '{',
+    ]) {
+      expect(normalizeIosNativeAssetsManifest(source), source);
+    }
+  });
 }
