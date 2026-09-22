@@ -2177,13 +2177,10 @@ abstract final class GeneratedPluginsPackage {
       final target = owner.substring(0, owner.length - '.build'.length);
       // A generated aggregate may reach an internal Swift target through a
       // product even though that target is not itself a public product.
-      // A null closure means the plan carried no dependency map. On Windows,
-      // include internal targets absent from the public-product candidates;
-      // otherwise the aggregate can race SentrySwift on older SwiftPM plans.
-      // Keep the existing candidate filter on POSIX hosts.
-      if (reachable == null &&
-          !(windows ?? Platform.isWindows) &&
-          !candidates.contains(target)) {
+      // Windows must include internal header targets such as SentrySwift,
+      // including when older plans carry no dependency map. Preserve the
+      // public-product candidate filter on POSIX hosts for every plan.
+      if (!(windows ?? Platform.isWindows) && !candidates.contains(target)) {
         continue;
       }
       if (reachable != null && !reachable.contains(target)) continue;

@@ -4080,6 +4080,15 @@ let package = Package(
         ),
         ['SentrySwift'],
       );
+      expect(
+        GeneratedPluginsPackage.plannedSwiftInteropTargets(
+          buildDir,
+          candidates: const {'sentry_flutter'},
+          windows: false,
+        ),
+        isEmpty,
+        reason: 'POSIX still prebuilds public-product candidates only',
+      );
     });
 
     test('prebuilds unfiltered when the plan carries no dependency map', () {
