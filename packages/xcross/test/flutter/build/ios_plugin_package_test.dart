@@ -2178,6 +2178,10 @@ let package = Package(
       File(
         p.join(repo, 'Sources', 'Types.h'),
       ).writeAsStringSync('typedef int T;\n');
+      File(p.join(repo, 'Package.swift')).writeAsStringSync(
+        'let package = Package(targets: [.target(name: "Dependency", '
+        'path: "Sources")])',
+      );
       File(p.join(repo, 'Sources', 'nested', 'a.txt')).writeAsStringSync('a');
       final fileLink = File(p.join(repo, 'include', 'Types.h'))
         ..writeAsStringSync('../Sources/Types.h');
@@ -2185,7 +2189,7 @@ let package = Package(
         ..writeAsStringSync('../Sources/nested');
       final danglingLink = File(p.join(repo, 'include', 'optional-example'))
         ..writeAsStringSync('../Sources/not-present');
-      git(['add', 'Sources', 'include']);
+      git(['add', 'Package.swift', 'Sources', 'include']);
       for (final link in [
         'include/Types.h',
         'include/nested',
@@ -2204,6 +2208,7 @@ let package = Package(
         isTrue,
       );
       expect(FileSystemEntity.isLinkSync(fileLink.path), isTrue);
+
       expect(FileSystemEntity.isLinkSync(dirLink.path), isTrue);
       expect(FileSystemEntity.isLinkSync(danglingLink.path), isTrue);
       expect(
@@ -2214,6 +2219,22 @@ let package = Package(
       );
       expect(fileLink.readAsStringSync(), 'typedef int T;\n');
       expect(File(p.join(dirLink.path, 'a.txt')).readAsStringSync(), 'a');
+
+      final stamp = Directory(
+        p.join(scratch, '.xcross-symlinks'),
+      ).listSync().whereType<File>().single;
+      final oldStamp =
+          jsonDecode(stamp.readAsStringSync()) as Map<String, dynamic>;
+      oldStamp['version'] = 2;
+      stamp.writeAsStringSync(jsonEncode(oldStamp));
+      expect(
+        await GeneratedPluginsPackage.materializeCheckoutSymlinks(
+          scratch,
+          symlinks: true,
+        ),
+        isFalse,
+      );
+      expect((jsonDecode(stamp.readAsStringSync()) as Map)['version'], 3);
 
       // Warm build: the stamp is keyed on HEAD and every link still holds,
       // so no git process is needed to conclude nothing changed.
@@ -2238,6 +2259,27 @@ let package = Package(
         isTrue,
       );
       expect(FileSystemEntity.isLinkSync(fileLink.path), isTrue);
+      final requiredLink = File(p.join(repo, 'Sources', 'required.h'))
+        ..writeAsStringSync('missing.h');
+      git(['add', 'Sources/required.h']);
+      final requiredHash =
+          (git(['hash-object', '-w', requiredLink.path]).stdout as String)
+              .trim();
+      git([
+        'update-index',
+        '--cacheinfo',
+        '120000',
+        requiredHash,
+        'Sources/required.h',
+      ]);
+      git(['commit', '-q', '-m', 'required source link']);
+      await expectLater(
+        GeneratedPluginsPackage.materializeCheckoutSymlinks(
+          scratch,
+          symlinks: true,
+        ),
+        throwsA(isA<FlutterBuildError>()),
+      );
     });
   });
 

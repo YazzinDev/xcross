@@ -4975,7 +4975,7 @@ let package = Package(
     String fingerprintOf(String identity) => sha256
         .convert(
           utf8.encode(
-            'xcross-symlink-materialization-v2\u0000'
+            'xcross-symlink-materialization-v3\u0000'
             '${Platform.operatingSystem}\u0000$mode\u0000$identity',
           ),
         )
@@ -5062,7 +5062,11 @@ let package = Package(
     } on FormatException {
       return false;
     }
-    if (decoded is! Map || decoded['fingerprint'] != fingerprint) return false;
+    if (decoded is! Map ||
+        decoded['version'] != 3 ||
+        decoded['fingerprint'] != fingerprint) {
+      return false;
+    }
     final links = decoded['links'];
     if (links is! List) return false;
     for (final entry in links) {
@@ -5070,19 +5074,39 @@ let package = Package(
       final path = entry['path'];
       final kind = entry['kind'];
       final target = entry['target'];
+      final directory = entry['directory'];
       if (path is! String || kind is! String || target is! String) return false;
-      if (!_linkIntact(path, kind, target)) {
+      if (kind == _stampKindSymlink && !entry.containsKey('directory')) {
+        return false;
+      }
+      if (directory != null && directory is! bool) return false;
+      if (!_linkIntact(path, kind, target, directory: directory as bool?)) {
         return false;
       }
     }
     return true;
   }
 
-  static bool _linkIntact(String path, String kind, String target) {
+  static bool _linkIntact(
+    String path,
+    String kind,
+    String target, {
+    bool? directory,
+  }) {
     switch (kind) {
       case _stampKindSymlink:
-        return FileSystemEntity.isLinkSync(path) &&
-            Link(path).targetSync() == target;
+        if (!FileSystemEntity.isLinkSync(path) ||
+            Link(path).targetSync() != target) {
+          return false;
+        }
+        final resolved = p.normalize(p.absolute(p.dirname(path), target));
+        if (Directory(resolved).existsSync()) {
+          return directory != false && Directory(path).existsSync();
+        }
+        if (File(resolved).existsSync()) {
+          return directory != true && File(path).existsSync();
+        }
+        return directory == null;
       case _stampKindForwarder:
         final file = File(path);
         return !FileSystemEntity.isLinkSync(path) &&
@@ -5160,19 +5184,17 @@ let package = Package(
       resolved[link] = resolve(link, <String>{});
     }
 
-    // POSIX and Git permit dangling symlinks. Preserve them when the Windows
-    // host supports real links too: some dependency repositories retain links
-    // to optional examples that are not present at a tagged revision. The
-    // hard-link fallback cannot represent one, so it still needs a real target.
-    if (!symlinks) {
-      for (final link in links.keys) {
-        final target = resolved[link]!;
-        if (!Directory(target).existsSync() && !File(target).existsSync()) {
-          throw FlutterBuildError(
-            'Symlink target does not exist in SwiftPM checkout: $link -> '
-            '$target',
-          );
-        }
+    // A real symlink can preserve a missing optional example. A link used by
+    // a declared package target, and every hard-link fallback, needs a target.
+    for (final link in links.keys) {
+      final target = resolved[link]!;
+      if (!Directory(target).existsSync() &&
+          !File(target).existsSync() &&
+          (!symlinks || _requiredPackageLink(root, link))) {
+        throw FlutterBuildError(
+          'Symlink target does not exist in SwiftPM checkout: $link -> '
+          '$target',
+        );
       }
     }
 
@@ -5196,9 +5218,62 @@ let package = Package(
 
     await stamp.parent.create(recursive: true);
     await stamp.writeAsString(
-      jsonEncode({'fingerprint': fingerprint, 'links': records}),
+      jsonEncode({'version': 3, 'fingerprint': fingerprint, 'links': records}),
     );
     return changed;
+  }
+
+  static bool _requiredPackageLink(String root, String link) {
+    final manifest = File(p.join(root, 'Package.swift'));
+    if (!manifest.existsSync()) return true;
+    final source = manifest.readAsStringSync();
+    final calls = [
+      for (final kind in [
+        '.target',
+        '.testTarget',
+        '.executableTarget',
+        '.macro',
+      ])
+        ..._swiftCalls(source, kind),
+    ];
+    if (calls.isEmpty) return true;
+    for (final call in calls) {
+      final name = _namedString(call.text, 'name');
+      final explicitPath = _namedString(call.text, 'path');
+      if (name == null && explicitPath == null) return true;
+      final targetRoot = p.normalize(
+        p.join(root, explicitPath ?? p.join('Sources', name)),
+      );
+      if (link != targetRoot && !p.isWithin(targetRoot, link)) continue;
+      final relative = p.relative(link, from: targetRoot);
+      final excluded = _namedStringList(call.text, 'exclude');
+      if (excluded.any(
+        (path) => p.equals(relative, path) || p.isWithin(path, relative),
+      )) {
+        continue;
+      }
+      final sources = _namedStringList(call.text, 'sources');
+      if (sources.isEmpty ||
+          sources.any(
+            (path) =>
+                p.equals(relative, path) ||
+                p.isWithin(path, relative) ||
+                p.isWithin(relative, path),
+          )) {
+        return true;
+      }
+      for (final resource in RegExp(
+        r'\.(?:process|copy)\(\s*"([^"]+)"',
+      ).allMatches(call.text)) {
+        final path = resource[1]!;
+        if (p.equals(relative, path) ||
+            p.isWithin(path, relative) ||
+            p.isWithin(relative, path)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /// Turns every placeholder into a real symlink carrying Git's own target
@@ -5232,6 +5307,11 @@ let package = Package(
         'path': link,
         'kind': _stampKindSymlink,
         'target': linkText(link),
+        'directory': Directory(resolved[link]!).existsSync()
+            ? true
+            : File(resolved[link]!).existsSync()
+            ? false
+            : null,
       });
     }
     if (pending.isEmpty) return false;
