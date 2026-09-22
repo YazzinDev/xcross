@@ -101,41 +101,39 @@ void main() {
   }
 
   for (final versionedLink in [false, true]) {
-    test(
-      'retains SDK contents under both names ($versionedLink)',
-      () async {
-        const sdks = 'Developer/Platforms/iPhoneOS.platform/Developer/SDKs';
-        final real = versionedLink ? 'iPhoneOS.sdk' : 'iPhoneOS26.0.sdk';
-        final alias = versionedLink ? 'iPhoneOS26.0.sdk' : 'iPhoneOS.sdk';
-        CpioEntry entry(String name, String data, int mode) => CpioEntry(
-          name: name,
-          mode: mode,
-          data: Uint8List.fromList(utf8.encode(data)),
-        );
-        await SdkInstall.writeSdkEntries(
-          Stream.fromIterable([
-            entry('$sdks/$real/usr/include/real.h', 'header', 0x81a4),
-            entry('$sdks/$real/usr/include/link.h', 'real.h', 0xa1ff),
-            entry('$sdks/$alias', real, 0xa1ff),
-          ]),
-          root.path,
-          materializeLinks: true,
-        );
-        final base = p.joinAll([root.path, ...sdks.split('/')]);
-        expect(Directory(p.join(base, 'iPhoneOS.sdk')).existsSync(), isTrue);
-        expect(
-          File(
-            p.join(base, 'iPhoneOS26.0.sdk', 'usr', 'include', 'link.h'),
-          ).readAsStringSync(),
-          'header',
-        );
-        expect(
-          File(p.join(base, 'iPhoneOS.sdk', 'usr', 'include', 'link.h'))
-              .readAsStringSync(),
-          'header',
-        );
-      },
-    );
+    test('retains SDK contents under both names ($versionedLink)', () async {
+      const sdks = 'Developer/Platforms/iPhoneOS.platform/Developer/SDKs';
+      final real = versionedLink ? 'iPhoneOS.sdk' : 'iPhoneOS26.0.sdk';
+      final alias = versionedLink ? 'iPhoneOS26.0.sdk' : 'iPhoneOS.sdk';
+      CpioEntry entry(String name, String data, int mode) => CpioEntry(
+        name: name,
+        mode: mode,
+        data: Uint8List.fromList(utf8.encode(data)),
+      );
+      await SdkInstall.writeSdkEntries(
+        Stream.fromIterable([
+          entry('$sdks/$real/usr/include/real.h', 'header', 0x81a4),
+          entry('$sdks/$real/usr/include/link.h', 'real.h', 0xa1ff),
+          entry('$sdks/$alias', real, 0xa1ff),
+        ]),
+        root.path,
+        materializeLinks: true,
+      );
+      final base = p.joinAll([root.path, ...sdks.split('/')]);
+      expect(Directory(p.join(base, 'iPhoneOS.sdk')).existsSync(), isTrue);
+      expect(
+        File(
+          p.join(base, 'iPhoneOS26.0.sdk', 'usr', 'include', 'link.h'),
+        ).readAsStringSync(),
+        'header',
+      );
+      expect(
+        File(
+          p.join(base, 'iPhoneOS.sdk', 'usr', 'include', 'link.h'),
+        ).readAsStringSync(),
+        'header',
+      );
+    });
   }
 
   test('does not classify aliases outside the imported bundle', () {
