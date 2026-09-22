@@ -1493,6 +1493,61 @@ let package = Package(
   });
 
   group('bootstrap binary recovery', () {
+    test('uses a normalized local Sentry path only for exact pins', () async {
+      final plugin = Directory(p.join(tmp.path, 'sentry-resolve'))
+        ..createSync();
+      final manifest = File(p.join(plugin.path, 'Package.swift'))
+        ..writeAsStringSync('''
+// swift-tools-version: 5.9
+import PackageDescription
+let package = Package(dependencies: [
+  .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "8.58.3")
+])
+''');
+      final original = manifest.readAsStringSync();
+      var clones = 0;
+      final result =
+          await GeneratedPluginsPackage.bootstrapWindowsSentryResolve(
+            [plugin.path],
+            p.join(tmp.path, 'vendor'),
+            windows: true,
+            clonePackage: (_, url, ref, destination) async {
+              clones++;
+              expect(url, 'https://github.com/getsentry/sentry-cocoa');
+              expect(ref, '8.58.3');
+              await Directory(destination).create(recursive: true);
+              await File(
+                p.join(destination, 'Package@swift-6.1.swift'),
+              ).writeAsString('''
+#elseif canImport(MSVCRT)
+import MSVCRT
+let env = getenv("EXPERIMENTAL_SPM_BUILDS")
+''');
+            },
+          );
+      expect(clones, 1);
+      expect(result.originals[manifest.path], original);
+      expect(
+        result.pins['https://github.com/getsentry/sentry-cocoa'],
+        '8.58.3',
+      );
+      expect(
+        manifest.readAsStringSync(),
+        contains('.package(name: "sentry-cocoa", path:'),
+      );
+      expect(
+        File(
+          p.join(
+            tmp.path,
+            'vendor',
+            'sentry-cocoa@8.58.3',
+            'Package@swift-6.1.swift',
+          ),
+        ).readAsStringSync(),
+        contains('import CRT'),
+      );
+    });
+
     test('retries resolve once and preserves failed cache semantics', () async {
       final package = Directory(p.join(tmp.path, 'package'))..createSync();
       final resolved = File(p.join(package.path, 'Package.resolved'));
@@ -2280,6 +2335,54 @@ let package = Package(
         ),
         throwsA(isA<FlutterBuildError>()),
       );
+    });
+
+    test('allows a missing symlink in a test-only target', () async {
+      if (!await HostSymlinkCapability.probe()) {
+        markTestSkipped('host cannot create symlinks');
+        return;
+      }
+      final scratch = p.join(tmp.path, 'test-target-links');
+      final repo = p.join(scratch, 'checkouts', 'dependency');
+      Directory(
+        p.join(repo, 'Tests', 'PluginTests'),
+      ).createSync(recursive: true);
+      ProcessResult git(List<String> arguments) {
+        final result = Process.runSync('git', [
+          '-c',
+          'core.symlinks=false',
+          '-C',
+          repo,
+          ...arguments,
+        ]);
+        expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+        return result;
+      }
+
+      git(['init']);
+      File(p.join(repo, 'Package.swift')).writeAsStringSync(
+        'let package = Package(targets: [.testTarget(name: "PluginTests")])',
+      );
+      final link = File(p.join(repo, 'Tests', 'PluginTests', 'fixture.txt'))
+        ..writeAsStringSync('missing.txt');
+      git(['add', 'Package.swift', 'Tests']);
+      final hash = (git(['hash-object', '-w', link.path]).stdout as String)
+          .trim();
+      git([
+        'update-index',
+        '--cacheinfo',
+        '120000',
+        hash,
+        'Tests/PluginTests/fixture.txt',
+      ]);
+      expect(
+        await GeneratedPluginsPackage.materializeCheckoutSymlinks(
+          scratch,
+          symlinks: true,
+        ),
+        isTrue,
+      );
+      expect(FileSystemEntity.isLinkSync(link.path), isTrue);
     });
   });
 
@@ -3876,6 +3979,38 @@ let package = Package(
           candidates: const {'Reachable', 'Orphan'},
         ),
         ['Reachable'],
+      );
+    });
+
+    test('prebuilds reachable internal Swift targets', () {
+      final buildDir = p.join(tmp.path, 'internal-interop');
+      final header = p.join(
+        buildDir,
+        'SentrySwift.build',
+        'include',
+        'SentrySwift-Swift.h',
+      );
+      Directory(buildDir).createSync(recursive: true);
+      File(p.join(buildDir, 'description.json')).writeAsStringSync(
+        jsonEncode({
+          'swiftCommands': {
+            'SentrySwift': {
+              'otherArguments': ['-emit-objc-header-path', header],
+            },
+          },
+          'targetDependencyMap': {
+            'FlutterPluginsGenerated': ['sentry_flutter'],
+            'sentry_flutter': ['SentrySwift'],
+            'SentrySwift': <String>[],
+          },
+        }),
+      );
+      expect(
+        GeneratedPluginsPackage.plannedSwiftInteropTargets(
+          buildDir,
+          candidates: const {'sentry_flutter'},
+        ),
+        ['SentrySwift'],
       );
     });
 

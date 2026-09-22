@@ -547,7 +547,7 @@ abstract final class GeneratedPluginsPackage {
         swiftBuild,
         arguments,
         environment: environment,
-        inheritStdio: windows && Log.isVerbose,
+        captureAndEcho: windows && Log.isVerbose,
         label: 'swift build',
       );
       await repairWindowsGeneratedBuildFiles(
@@ -2063,7 +2063,12 @@ abstract final class GeneratedPluginsPackage {
       final owner = p.basename(p.dirname(argument));
       if (!owner.endsWith('.build')) continue;
       final target = owner.substring(0, owner.length - '.build'.length);
-      if (!candidates.contains(target)) continue;
+      // A generated aggregate may reach an internal Swift target through a
+      // product even though that target is not itself a public product.
+      if (!candidates.contains(target) &&
+          (reachable == null || !reachable.contains(target))) {
+        continue;
+      }
       // A null closure means the plan carried no dependency map to filter
       // with, so fall back to the unfiltered set rather than skipping the
       // prepass and reintroducing the race.
@@ -2586,33 +2591,48 @@ abstract final class GeneratedPluginsPackage {
         );
       }
       final scoped = evaluateDependencyRefs;
-      final unified = await resolveUnifiedDependencyRefs(
-        resolveRoot: p.join(outputDir, 'Resolve'),
-        packageDirectories: prestaged,
-        evaluate: (directory, dependencies) => scoped != null
-            ? scoped(
-                directory,
-                scratchPath: scratchPath,
-                binaryArtifactStore: binaryArtifactStore,
-                binaryArtifactFallback: binaryArtifactFallback,
-                swiftPmArtifactJunctionCapability:
-                    swiftPmArtifactJunctionCapability,
-                packageLocalArtifactJunctionCapability:
-                    packageLocalArtifactJunctionCapability,
-                dependencies: dependencies,
-              )
-            : _evaluatedDependencyRefs(
-                directory,
-                ProcessRunner.locateTool,
-                scratchPath: scratchPath,
-                binaryArtifactStore: binaryArtifactStore,
-                binaryArtifactFallback: binaryArtifactFallback,
-                swiftPmArtifactJunctionCapability:
-                    swiftPmArtifactJunctionCapability,
-                dependencies: dependencies,
-              ),
-      );
-      if (unified != null) {
+      final bootstrap = windows
+          ? await bootstrapWindowsSentryResolve(
+              prestaged,
+              resolvedVendorDir,
+              clonePackage: clonePackage,
+            )
+          : (pins: <String, String>{}, originals: <String, String>{});
+      Map<String, String>? unified;
+      try {
+        unified = await resolveUnifiedDependencyRefs(
+          resolveRoot: p.join(outputDir, 'Resolve'),
+          packageDirectories: prestaged,
+          evaluate: (directory, dependencies) => scoped != null
+              ? scoped(
+                  directory,
+                  scratchPath: scratchPath,
+                  binaryArtifactStore: binaryArtifactStore,
+                  binaryArtifactFallback: binaryArtifactFallback,
+                  swiftPmArtifactJunctionCapability:
+                      swiftPmArtifactJunctionCapability,
+                  packageLocalArtifactJunctionCapability:
+                      packageLocalArtifactJunctionCapability,
+                  dependencies: dependencies,
+                )
+              : _evaluatedDependencyRefs(
+                  directory,
+                  ProcessRunner.locateTool,
+                  scratchPath: scratchPath,
+                  binaryArtifactStore: binaryArtifactStore,
+                  binaryArtifactFallback: binaryArtifactFallback,
+                  swiftPmArtifactJunctionCapability:
+                      swiftPmArtifactJunctionCapability,
+                  dependencies: dependencies,
+                ),
+        );
+      } finally {
+        for (final entry in bootstrap.originals.entries) {
+          await _writeStable(entry.key, entry.value);
+        }
+      }
+      final pinned = {...?unified, ...bootstrap.pins};
+      if (pinned.isNotEmpty) {
         pluginRefEvaluator =
             (
               _, {
@@ -2622,7 +2642,7 @@ abstract final class GeneratedPluginsPackage {
               required swiftPmArtifactJunctionCapability,
               required packageLocalArtifactJunctionCapability,
               required dependencies,
-            }) async => unified;
+            }) async => pinned;
       }
     }
 
@@ -2696,6 +2716,80 @@ abstract final class GeneratedPluginsPackage {
       deploymentTarget: deploymentTarget,
       verbose: verbose,
     );
+  }
+
+  /// SwiftPM evaluates remote manifests while computing versions. Sentry
+  /// 8.58.3's Swift 6.1 manifest calls `getenv` without importing Windows CRT,
+  /// so it fails before the checkout-normalization pass can reach it. Resolve
+  /// this exact pinned dependency through a normalized local checkout, then
+  /// restore the staged plugin manifests for the normal vendoring pass.
+  @visibleForTesting
+  static Future<({Map<String, String> pins, Map<String, String> originals})>
+  bootstrapWindowsSentryResolve(
+    Iterable<String> packageDirectories,
+    String vendorDir, {
+    bool? windows,
+    Future<void> Function(
+      String git,
+      String url,
+      String ref,
+      String destination,
+    )?
+    clonePackage,
+  }) async {
+    if (!(windows ?? Platform.isWindows)) {
+      return (pins: <String, String>{}, originals: <String, String>{});
+    }
+    final originals = <String, String>{};
+    final pins = <String, String>{};
+    final replacements = <String, String>{};
+    String? git;
+    for (final directory in packageDirectories) {
+      final manifestFile = File(p.join(directory, 'Package.swift'));
+      if (!manifestFile.existsSync()) continue;
+      final original = await manifestFile.readAsString();
+      var rewritten = original;
+      for (final dependency in parseUrlPackageDeps(original)) {
+        if (packageIdentityFromUrl(dependency.url) != 'sentry-cocoa') {
+          continue;
+        }
+        final version = RegExp(
+          r'exact:\s*"([0-9]+(?:\.[0-9]+){2})"',
+        ).firstMatch(dependency.match)?[1];
+        // Do not substitute a range with an arbitrary version. SwiftPM must
+        // still solve any future non-exact constraint itself.
+        if (version == null) continue;
+        final destination = p.join(
+          vendorDir,
+          vendorPackageDirName(dependency.url, version),
+        );
+        if (!replacements.containsKey(dependency.url)) {
+          git ??= await ProcessRunner.locateTool('git');
+          await (clonePackage ?? _cloneGitPackage)(
+            git,
+            dependency.url,
+            version,
+            destination,
+          );
+          await _normalizeVendoredPackageManifests(
+            destination,
+            consumedProducts: const {'Sentry'},
+          );
+          replacements[dependency.url] = destination;
+          pins[_canonicalGitUrl(dependency.url)] = version;
+        }
+        rewritten = rewritten.replaceAll(
+          dependency.match,
+          '.package(name: "${dependency.identity}", '
+          'path: "${_swiftPath(destination)}")',
+        );
+      }
+      if (rewritten != original) {
+        originals[manifestFile.path] = original;
+        await _writeStable(manifestFile.path, rewritten);
+      }
+    }
+    return (pins: pins, originals: originals);
   }
 
   /// Pins every URL dependency reachable from [packageDirectories] with a
@@ -5319,15 +5413,12 @@ let package = Package(
     if (!manifest.existsSync()) return true;
     final source = manifest.readAsStringSync();
     final calls = [
-      for (final kind in [
-        '.target',
-        '.testTarget',
-        '.executableTarget',
-        '.macro',
-      ])
+      for (final kind in ['.target', '.executableTarget', '.macro'])
         ..._swiftCalls(source, kind),
     ];
-    if (calls.isEmpty) return true;
+    // Plugin builds never compile SwiftPM test targets. A checkout containing
+    // only tests may therefore keep their dangling fixture/example links.
+    if (calls.isEmpty) return _swiftCalls(source, '.testTarget').isEmpty;
     for (final call in calls) {
       final name = _namedString(call.text, 'name');
       final explicitPath = _namedString(call.text, 'path');
