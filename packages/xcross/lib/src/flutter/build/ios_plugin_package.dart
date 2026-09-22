@@ -1587,6 +1587,10 @@ abstract final class GeneratedPluginsPackage {
     }
 
     final before = swiftInteropSearchPaths(targetBuildDir).toSet();
+    final missingBefore = missingSwiftInteropTargets(
+      targetBuildDir,
+      candidates: interopTargetCandidates,
+    ).toSet();
     try {
       await build();
     } on Object catch (error, stack) {
@@ -1595,7 +1599,11 @@ abstract final class GeneratedPluginsPackage {
         r'[A-Za-z_0-9-]+-Swift\.h[^\n]*(?:file not found|not found|No such file)',
         caseSensitive: false,
       ).hasMatch(diagnostic);
-      if (!missingHeader) rethrow;
+      final newlyExposed = missingSwiftInteropTargets(
+        targetBuildDir,
+        candidates: interopTargetCandidates,
+      ).toSet().difference(missingBefore);
+      if (!missingHeader && newlyExposed.isEmpty) rethrow;
       // Internal targets may be absent from public products, but must still
       // be reachable from the generated aggregate build plan.
       final reachable = plannedTargetClosure(
