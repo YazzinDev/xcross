@@ -1,10 +1,10 @@
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:xml/xml.dart';
 import 'package:xcross/src/flutter/build/internal/required_plist_key.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
 import 'package:xcross/src/flutter/constants.dart';
+import 'package:xml/xml.dart';
 
 /// Plist / xcconfig text manipulation for the generated app bundle.
 ///
@@ -136,8 +136,9 @@ abstract final class InfoPlist {
     const service = '_dartVmService._tcp';
     final document = XmlDocument.parse(plistXml);
     final root = document.rootElement.getElement('dict');
-    if (root == null)
+    if (root == null) {
       throw const FormatException('Info.plist has no root dict');
+    }
 
     XmlElement? valueFor(String name) {
       final entries = root.childElements.toList();
@@ -171,10 +172,13 @@ abstract final class InfoPlist {
       return plistXml;
     }
 
-    final services = currentServices ?? XmlElement(XmlName('array'));
+    final services =
+        currentServices ?? XmlElement(const XmlName.parts('array'));
     if (currentServices == null) {
       root.children.add(
-        XmlElement(XmlName('key'), [], [XmlText('NSBonjourServices')]),
+        XmlElement(const XmlName.parts('key'), [], [
+          XmlText('NSBonjourServices'),
+        ]),
       );
       root.children.add(services);
     }
@@ -182,17 +186,17 @@ abstract final class InfoPlist {
       (entry) => entry.name.local == 'string' && entry.innerText == service,
     )) {
       services.children.add(
-        XmlElement(XmlName('string'), [], [XmlText(service)]),
+        XmlElement(const XmlName.parts('string'), [], [XmlText(service)]),
       );
     }
     if (currentUsage == null) {
       root.children.add(
-        XmlElement(XmlName('key'), [], [
+        XmlElement(const XmlName.parts('key'), [], [
           XmlText('NSLocalNetworkUsageDescription'),
         ]),
       );
       root.children.add(
-        XmlElement(XmlName('string'), [], [
+        XmlElement(const XmlName.parts('string'), [], [
           XmlText(
             'Allow Flutter tools on your computer to connect and debug '
             'your application. This prompt will not appear on release builds.',
@@ -214,24 +218,19 @@ abstract final class InfoPlist {
     return result;
   }
 
-  /// Parse `KEY = VALUE` lines from an Xcode `.xcconfig` file.
-  /// Strips `[config]` suffixes (e.g. `KEY[debug] = VALUE`).
-  static Map<String, String> parseXcconfig(String text) {
-    final result = <String, String>{};
-    for (final raw in text.split('\n')) {
-      final line = raw.trim();
-      if (line.isEmpty || line.startsWith('//') || line.startsWith('#')) {
-        continue;
-      }
-      final eq = line.indexOf('=');
-      if (eq < 0) continue;
-      var key = line.substring(0, eq).trim();
-      final bracket = key.indexOf('[');
-      if (bracket >= 0) key = key.substring(0, bracket).trim();
-      final value = line.substring(eq + 1).trim();
-      result[key] = value;
+  /// Evaluate assignments for one Xcode build context. Includes require a
+  /// file location and are handled by [readXcconfigFiles].
+  static Map<String, String> parseXcconfig(
+    String text, {
+    String configuration = 'Debug',
+    String sdk = 'iphoneos',
+    String arch = 'arm64',
+  }) {
+    final values = <String, String>{};
+    for (final line in text.split('\n')) {
+      _applyXcconfigAssignment(line, values, configuration, sdk, arch);
     }
-    return result;
+    return _expandXcconfigValues(values);
   }
 
   /// Reads Xcode configuration files in precedence order.
@@ -240,15 +239,117 @@ abstract final class InfoPlist {
   /// settings. xcross does not run Xcode, so callers provide both files in
   /// that same order when expanding the application Info.plist.
   static Future<Map<String, String>> readXcconfigFiles(
-    Iterable<String> paths,
-  ) async {
+    Iterable<String> paths, {
+    String configuration = 'Debug',
+    String sdk = 'iphoneos',
+    String arch = 'arm64',
+  }) async {
     final values = <String, String>{};
-    for (final path in paths) {
+    final stack = <String>{};
+
+    Future<void> read(String path, {required bool optional}) async {
       final file = File(path);
-      if (!file.existsSync()) continue;
-      values.addAll(parseXcconfig(await file.readAsString()));
+      if (!file.existsSync()) {
+        if (optional) return;
+        throw FormatException('Required xcconfig include not found: $path');
+      }
+      final resolved = p.normalize(file.absolute.path);
+      if (!stack.add(resolved)) {
+        throw FormatException('xcconfig include cycle at $resolved');
+      }
+      try {
+        for (final raw in await file.readAsLines()) {
+          final line = raw.trim();
+          final include = RegExp(
+            r'^#include(\?)?\s+"([^"]+)"\s*$',
+          ).firstMatch(line);
+          if (include != null) {
+            await read(
+              p.normalize(p.join(p.dirname(resolved), include[2])),
+              optional: include[1] == '?',
+            );
+          } else {
+            _applyXcconfigAssignment(raw, values, configuration, sdk, arch);
+          }
+        }
+      } finally {
+        stack.remove(resolved);
+      }
     }
-    return values;
+
+    for (final path in paths) {
+      await read(path, optional: true);
+    }
+    return _expandXcconfigValues(values);
+  }
+
+  static void _applyXcconfigAssignment(
+    String raw,
+    Map<String, String> values,
+    String configuration,
+    String sdk,
+    String arch,
+  ) {
+    final line = raw.trim();
+    if (line.isEmpty || line.startsWith('//') || line.startsWith('#')) return;
+    final assignment = RegExp(
+      r'^([A-Za-z_][A-Za-z_0-9.]*)(\s*(?:\[[^\]]+\])*)\s*=\s*(.*)$',
+    ).firstMatch(line);
+    if (assignment == null) {
+      throw FormatException('Unsupported xcconfig assignment: $line');
+    }
+    final key = assignment[1]!;
+    final head = assignment[2]!;
+    for (final match in RegExp(r'\[([^\]]+)\]').allMatches(head)) {
+      final qualifier = match[1]!;
+      final eq = qualifier.indexOf('=');
+      final kind = eq < 0 ? 'config' : qualifier.substring(0, eq);
+      final pattern = eq < 0 ? qualifier : qualifier.substring(eq + 1);
+      final actual = switch (kind.toLowerCase()) {
+        'config' => configuration,
+        'sdk' => sdk,
+        'arch' => arch,
+        _ => throw FormatException(
+          'Unsupported xcconfig qualifier: $qualifier',
+        ),
+      };
+      final expression = RegExp(
+        '^${RegExp.escape(pattern).replaceAll(r'\*', '.*')}\$',
+        caseSensitive: false,
+      );
+      if (!expression.hasMatch(actual)) return;
+    }
+    final inherited = values[key] ?? '';
+    values[key] = assignment[3]!
+        .replaceAll(r'$(inherited)', inherited)
+        .replaceAll(r'${inherited}', inherited);
+  }
+
+  static Map<String, String> _expandXcconfigValues(Map<String, String> values) {
+    final expanded = <String, String>{};
+    String resolve(String key, Set<String> stack) {
+      if (expanded[key] case final String cached) return cached;
+      if (!stack.add(key)) {
+        throw FormatException('xcconfig variable cycle: $key');
+      }
+      final raw = values[key]!;
+      final value = raw.replaceAllMapped(
+        RegExp(r'\$\(([^)]+)\)|\$\{([^}]+)\}'),
+        (match) {
+          final reference = match[1] ?? match[2]!;
+          return values.containsKey(reference)
+              ? resolve(reference, stack)
+              : match[0]!;
+        },
+      );
+      stack.remove(key);
+      return expanded[key] = value;
+    }
+
+    for (final key in values.keys) {
+      resolve(key, <String>{});
+    }
+    return expanded;
   }
 
   /// Overwrite an existing `<key>K</key><string>…</string>` pair, or insert a

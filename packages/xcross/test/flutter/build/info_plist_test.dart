@@ -2,10 +2,10 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
-import 'package:xml/xml.dart';
 import 'package:xcross/src/flutter/build/info_plist.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
 import 'package:xcross/src/flutter/constants.dart';
+import 'package:xml/xml.dart';
 
 const _minimalPlist =
     '<?xml version="1.0"?>\n'
@@ -61,6 +61,71 @@ BAZ = a=b
         expect(
           await InfoPlist.readXcconfigFiles([generated.path, debug.path]),
           {'APP_ID': 'debug', 'SHARED': 'generated'},
+        );
+      } finally {
+        await tmp.delete(recursive: true);
+      }
+    });
+
+    test(
+      'evaluates SDK and architecture qualifiers before assigning values',
+      () {
+        final settings = InfoPlist.parseXcconfig('''
+PRODUCT_BUNDLE_IDENTIFIER = com.example.device
+PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*] = com.example.sim
+PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*][arch=arm64] = com.example.arm
+OTHER[config=Release] = release
+OTHER[config=Debug] = debug
+''');
+        expect(settings['PRODUCT_BUNDLE_IDENTIFIER'], 'com.example.arm');
+        expect(settings['OTHER'], 'debug');
+      },
+    );
+
+    test(
+      'processes nested includes, inherited values and references',
+      () async {
+        final tmp = await Directory.systemTemp.createTemp('xcconfig_includes-');
+        try {
+          final generated = File(p.join(tmp.path, 'Generated.xcconfig'))
+            ..writeAsStringSync('BASE = com.example\nAPP = \$(BASE)\n');
+          final nested = Directory(p.join(tmp.path, 'nested'))..createSync();
+          File(p.join(nested.path, 'Shared.xcconfig')).writeAsStringSync(
+            'APP = '
+            r'$(inherited).shared'
+            '\n',
+          );
+          final debug = File(p.join(tmp.path, 'Debug.xcconfig'))
+            ..writeAsStringSync(r'''
+#include "nested/Shared.xcconfig"
+#include? "missing.xcconfig"
+APP[sdk=iphonesimulator*] = simulator
+APP[sdk=iphoneos*] = $(inherited).device
+''');
+          final settings = await InfoPlist.readXcconfigFiles([
+            generated.path,
+            debug.path,
+          ]);
+          expect(settings['APP'], 'com.example.shared.device');
+        } finally {
+          await tmp.delete(recursive: true);
+        }
+      },
+    );
+
+    test('reports missing required includes and cycles', () async {
+      final tmp = await Directory.systemTemp.createTemp('xcconfig_errors-');
+      try {
+        final config = File(p.join(tmp.path, 'Debug.xcconfig'))
+          ..writeAsStringSync('#include "missing.xcconfig"\n');
+        await expectLater(
+          InfoPlist.readXcconfigFiles([config.path]),
+          throwsFormatException,
+        );
+        config.writeAsStringSync('#include "Debug.xcconfig"\n');
+        await expectLater(
+          InfoPlist.readXcconfigFiles([config.path]),
+          throwsFormatException,
         );
       } finally {
         await tmp.delete(recursive: true);
@@ -462,7 +527,8 @@ BAZ = a=b
 
   group('debug discovery plist structure', () {
     test('keeps a following array separate from an empty service array', () {
-      const source = '''<plist version="1.0"><dict>
+      const source = '''
+<plist version="1.0"><dict>
 <key>NSBonjourServices</key><array />
 <key>UISupportedInterfaceOrientations</key><array><string>Portrait</string></array>
 <key>Nested</key><dict><key>NSBonjourServices</key><array/></dict>
