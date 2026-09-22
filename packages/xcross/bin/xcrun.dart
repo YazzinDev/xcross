@@ -41,6 +41,8 @@ String? xcrunShimResponse(List<String> arguments, {String? executable}) {
   final shimSdk = _readShimSdk(xcrunExecutable);
   if (shimSdk == null) return null;
 
+  _requireIPhoneOsSdk(arguments, shimSdk);
+
   if (arguments.contains('--show-sdk-path')) return shimSdk;
   if (arguments.contains('--show-sdk-platform-path')) {
     return _sdkPlatformPath(shimSdk);
@@ -49,7 +51,11 @@ String? xcrunShimResponse(List<String> arguments, {String? executable}) {
   if (arguments.contains('--version')) {
     // Source builds are labelled "unreleased", but the hook's tool resolver
     // requires a numeric version even for a development executable.
-    const version = XcrossVersion.isReleased ? XcrossVersion.current : '0.0.0';
+    const current = XcrossVersion.current;
+    final version =
+        RegExp(r'^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$').hasMatch(current)
+        ? current
+        : '0.0.0';
     return 'xcross xcrun $version';
   }
   return findShimTool(arguments, executable: xcrunExecutable);
@@ -85,6 +91,19 @@ Future<int> runXcrun(
     stderr.writeln(
       'xcrun: no Darwin SDK installed; run `xcross sdk install` first',
     );
+    return 1;
+  }
+
+  try {
+    final requested = _requestedSdk(arguments);
+    if (requested != null && !requested.toLowerCase().startsWith('iphoneos')) {
+      throw FormatException('SDK $requested is not installed');
+    }
+    if (requested != null) {
+      _requireIPhoneOsSdk(arguments, sdk.iPhoneOSSdk());
+    }
+  } on FormatException catch (error) {
+    stderr.writeln('xcrun: $error');
     return 1;
   }
 
@@ -143,9 +162,36 @@ int _toolIndex(List<String> arguments) {
       index++;
       continue;
     }
+    if (arguments[index].startsWith('--sdk=')) continue;
     if (!arguments[index].startsWith('-')) return index;
   }
   return -1;
+}
+
+void _requireIPhoneOsSdk(List<String> arguments, String installedSdk) {
+  final requested = _requestedSdk(arguments);
+  if (requested == null) return;
+  final name = requested.toLowerCase();
+  final installedName = p.basenameWithoutExtension(installedSdk).toLowerCase();
+  if (name != 'iphoneos' && name != installedName) {
+    throw FormatException('SDK $requested is not installed');
+  }
+}
+
+String? _requestedSdk(List<String> arguments) {
+  String? requested;
+  for (var index = 0; index < arguments.length; index++) {
+    final argument = arguments[index];
+    if (argument == '--sdk') {
+      if (index + 1 >= arguments.length) {
+        throw const FormatException('missing SDK name after --sdk');
+      }
+      requested = arguments[++index];
+    } else if (argument.startsWith('--sdk=')) {
+      requested = argument.substring('--sdk='.length);
+    }
+  }
+  return requested;
 }
 
 Future<String?> _findOnPath(String name) =>

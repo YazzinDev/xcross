@@ -95,7 +95,7 @@ void main() {
         xcrun.xcrunShimResponse(const [
           '--version',
         ], executable: executable.path),
-        'xcross xcrun ${XcrossVersion.isReleased ? XcrossVersion.current : '0.0.0'}',
+        'xcross xcrun ${RegExp(r'^\d+\.\d+\.\d+').hasMatch(XcrossVersion.current) ? XcrossVersion.current : '0.0.0'}',
       );
       expect(
         xcrun.xcrunShimResponse(const [
@@ -105,8 +105,35 @@ void main() {
         ], executable: executable.path),
         platform,
       );
+      for (final arguments in [
+        ['--sdk', 'macosx', '--show-sdk-path'],
+        ['--sdk=iphonesimulator', '--show-sdk-platform-path'],
+      ]) {
+        expect(
+          () => xcrun.xcrunShimResponse(arguments, executable: executable.path),
+          throwsFormatException,
+        );
+      }
+      expect(
+        xcrun.xcrunShimResponse(const [
+          '--sdk=iphoneos',
+          '--show-sdk-path',
+        ], executable: executable.path),
+        sdk,
+      );
     } finally {
       await directory.delete(recursive: true);
     }
+  });
+
+  test('rejects unavailable SDKs before resolving a tool', () async {
+    expect(
+      await xcrun.runXcrun(const [
+        '--sdk=macosx',
+        '--find',
+        'clang',
+      ], sdk: DarwinSdk('/unused')),
+      1,
+    );
   });
 }
