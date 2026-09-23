@@ -599,7 +599,7 @@ final class FlutterPacker {
   ///   1. Hard-coded defaults (`1.0.0` / `1`).
   ///   2. `Debug.xcconfig` and its includes in textual order, falling back
   ///      to `Generated.xcconfig` only when no Debug file exists.
-  ///   4. Explicit `--build-name` / `--build-number` CLI flags.
+  ///   3. Explicit `--build-name` / `--build-number` CLI flags.
   @visibleForTesting
   Future<Map<String, String>> buildSubstitutionMap() async {
     final subs = <String, String>{

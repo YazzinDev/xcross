@@ -51,7 +51,7 @@ BAZ = a=b
       });
     });
 
-    test('reads configuration files in Xcode precedence order', () async {
+    test('evaluates explicitly ordered configuration roots', () async {
       final tmp = await Directory.systemTemp.createTemp('xcconfig_files-');
       try {
         final generated = File(p.join(tmp.path, 'Generated.xcconfig'))
@@ -199,6 +199,24 @@ APP[sdk=iphoneos*] = $(inherited).device
         ),
         {'SUFFIX': 'generated'},
       );
+    });
+
+    test('applies included assignments at their textual position', () async {
+      final tmp = await Directory.systemTemp.createTemp('xcconfig-order-');
+      addTearDown(() => tmp.delete(recursive: true));
+      File(
+        p.join(tmp.path, 'Shared.xcconfig'),
+      ).writeAsStringSync('APP = included\n');
+      final debug = File(p.join(tmp.path, 'Debug.xcconfig'))
+        ..writeAsStringSync(
+          'APP = before\n'
+          '#include "Shared.xcconfig"\n'
+          r'APP = $(inherited).after'
+          '\n',
+        );
+      expect(await InfoPlist.readXcconfigFiles([debug.path]), {
+        'APP': 'included.after',
+      });
     });
   });
 
