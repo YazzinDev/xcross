@@ -134,6 +134,20 @@ void main() {
       expect(bytes, copy, reason: 'an unsafe file must be left alone');
     });
 
+    test('retains the final symbol terminator inside the shortened table', () {
+      final bytes = buildMachO(
+        indirectCount: 171,
+        strings: stringTable('_hello', padding: 3),
+      );
+      final copy = Uint8List.fromList(bytes);
+
+      expect(
+        MachOLinkeditAligner.alignBytes(bytes, source: 'fixture'),
+        isFalse,
+      );
+      expect(bytes, copy, reason: 'three padding bytes are not enough');
+    });
+
     test('leaves every already-aligned layout byte-identical', () {
       // Sweep the indirect-symbol counts a correct linker produces (Apple
       // ld64, and lld whenever the count happens to be even). None of these

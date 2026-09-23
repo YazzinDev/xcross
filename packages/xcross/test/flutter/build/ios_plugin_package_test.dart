@@ -2589,6 +2589,94 @@ let package = Package(targets: [
       expect(source, isNot(contains('[xcross] registering plugin')));
     });
 
+    test('guards an explicitly newer Swift plugin class at runtime', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final source = File(
+        p.join(
+          plugin.swiftPackageDir,
+          'Sources',
+          'new_plugin',
+          'NewPlugin.swift',
+        ),
+      );
+      source.createSync(recursive: true);
+      source.writeAsStringSync('''
+import Flutter
+@available(iOS 17.0, *)
+public class NewPlugin: NSObject, FlutterPlugin {
+  public static func register(with registrar: FlutterPluginRegistrar) {}
+}
+''');
+
+      expect(plugin.pluginClassIosAvailability, '17.0');
+      final registrant = GeneratedPluginsPackage.registrantSource([plugin]);
+      expect(registrant, contains('if #available(iOS 17.0, *) {'));
+      expect(registrant, contains('NewPlugin.register(with: registrar)'));
+      expect(registrant, isNot(contains('NSClassFromString')));
+      final verbose = GeneratedPluginsPackage.registrantSource([
+        plugin,
+      ], verbose: true);
+      expect(verbose, contains('requires iOS 17.0'));
+    });
+
+    test('does not inherit availability from an intervening declaration', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final source = File(
+        p.join(plugin.swiftPackageDir, 'Sources', 'NewPlugin.swift'),
+      )..createSync(recursive: true);
+      source.writeAsStringSync('''
+@available(iOS 17.0, *)
+public typealias NewAlias = String
+public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+
+      expect(plugin.pluginClassIosAvailability, isNull);
+      expect(
+        GeneratedPluginsPackage.registrantSource([plugin]),
+        isNot(contains('if #available(iOS 17.0, *)')),
+      );
+    });
+
+    test('uses the highest stacked iOS availability requirement', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final source = File(
+        p.join(plugin.swiftPackageDir, 'Sources', 'NewPlugin.swift'),
+      )..createSync(recursive: true);
+      source.writeAsStringSync('''
+@available(iOS 18.0, *)
+@available(iOS 17.0, *)
+public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+
+      expect(plugin.pluginClassIosAvailability, '18.0');
+      expect(
+        GeneratedPluginsPackage.registrantSource([plugin]),
+        contains('if #available(iOS 18.0, *)'),
+      );
+    });
+
+    test('recognizes long-form iOS availability and ignores comments', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final source = File(
+        p.join(plugin.swiftPackageDir, 'Sources', 'NewPlugin.swift'),
+      )..createSync(recursive: true);
+      source.writeAsStringSync('''
+/*
+@available(iOS 99.0, *)
+public class NewPlugin: NSObject, FlutterPlugin {}
+*/
+// @available(iOS 98.0, *)
+@available(iOS, introduced: 17.0)
+public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+
+      expect(plugin.pluginClassIosAvailability, '17.0');
+      expect(
+        GeneratedPluginsPackage.registrantSource([plugin]),
+        contains('if #available(iOS 17.0, *)'),
+      );
+    });
+
     test('verbose source tracks each plugin and prints a summary', () {
       final source = GeneratedPluginsPackage.registrantSource([
         makePlugin('plugin_a', pluginClass: 'PluginA'),
@@ -4934,6 +5022,31 @@ module FirebaseFirestore {
         '${directory.path};${r'C:\configured\tools'}',
       );
     });
+
+    test(
+      'reads the Windows Path key without losing configured tools',
+      () async {
+        final directory = await Directory.systemTemp.createTemp('xcross-path-');
+        addTearDown(() async {
+          ProcessRunner.resetConfiguration();
+          await directory.delete(recursive: true);
+        });
+        File(p.join(directory.path, 'xcrun.exe')).writeAsStringSync('shim');
+        ProcessRunner.configure(
+          normalizedTools: const {},
+          effectiveChildEnvironment: const {'Path': r'C:\configured\tools'},
+        );
+
+        final environment = GeneratedPluginsPackage.swiftProcessEnvironment(
+          windows: true,
+          executable: p.join(directory.path, 'xcross.exe'),
+        )!;
+        expect(
+          environment['PATH'],
+          '${directory.path};${r'C:\configured\tools'}',
+        );
+      },
+    );
 
     test('disables every configured git credential helper', () {
       // A system-wide helper (Git Credential Manager on the Windows

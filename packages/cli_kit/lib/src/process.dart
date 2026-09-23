@@ -92,8 +92,18 @@ abstract final class ProcessRunner {
     final configured = configuration?.effectiveChildEnvironment;
     if (configured == null) return operationEnvironment;
     if (operationEnvironment == null) return {...configured};
+    if (!Platform.isWindows) return {...configured, ...operationEnvironment};
 
-    return {...configured, ...operationEnvironment};
+    // Windows environment keys are case-insensitive. Remove an existing Path
+    // (or any other differently cased key) before applying a local override.
+    final merged = {...configured};
+    for (final entry in operationEnvironment.entries) {
+      merged.removeWhere(
+        (key, _) => key.toUpperCase() == entry.key.toUpperCase(),
+      );
+      merged[entry.key] = entry.value;
+    }
+    return merged;
   }
 
   static bool get _inheritParentEnvironment => _configuration == null;
@@ -702,7 +712,7 @@ abstract final class ProcessRunner {
 
     final found = <String>[if (toolchain != null) toolchain];
     final seen = <String>{};
-    final searchPath = _environmentValue(env, 'PATH') ?? '';
+    final searchPath = environmentValue(env, 'PATH') ?? '';
     final directories = [
       ...searchPath.split(onWindows ? ';' : ':'),
       ...extraDirectories,
@@ -820,7 +830,7 @@ abstract final class ProcessRunner {
   }
 
   static List<String> _pathExtensions(Map<String, String> env) =>
-      (_environmentValue(env, 'PATHEXT') ?? '.COM;.EXE;.BAT;.CMD')
+      (environmentValue(env, 'PATHEXT') ?? '.COM;.EXE;.BAT;.CMD')
           .split(';')
           .where((extension) => extension.isNotEmpty)
           .map(
@@ -835,7 +845,8 @@ abstract final class ProcessRunner {
     return [name, for (final extension in extensions) '$name$extension'];
   }
 
-  static String? _environmentValue(Map<String, String> env, String name) {
+  /// Reads an environment key case-insensitively, as Windows does.
+  static String? environmentValue(Map<String, String> env, String name) {
     final exact = env[name];
     if (exact != null) return exact;
     for (final entry in env.entries) {

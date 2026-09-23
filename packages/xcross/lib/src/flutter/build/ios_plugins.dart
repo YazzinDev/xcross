@@ -88,6 +88,93 @@ final class IosPlugin {
     return null;
   }
 
+  /// An explicit iOS availability annotation immediately preceding the Swift
+  /// plugin class, when one is present. The generated registrant uses it for
+  /// a runtime guard; absent metadata must not be guessed from the package's
+  /// minimum deployment target, which can be lower than the class's API.
+  String? get pluginClassIosAvailability {
+    final pluginClass = pluginClassIos;
+    if (pluginClass == null) return null;
+    final sources = Directory(p.join(swiftPackageDir, 'Sources'));
+    if (!sources.existsSync()) return null;
+    final declaration = RegExp('\\bclass\\s+${RegExp.escape(pluginClass)}\\b');
+    final declarationPrefix = RegExp(
+      r'^(?:(?:@[A-Za-z_]\w*(?:\([^)]*\))?|public|open|internal|private|'
+      r'fileprivate|final|dynamic|nonisolated)\s+)*$',
+    );
+    final attributes = RegExp(
+      r'^(?:@[A-Za-z_]\w*(?:\([^)]*\))?\s*)+$',
+      dotAll: true,
+    );
+    final availability = RegExp(
+      r'@available\s*\(\s*iOS(?:\s+(\d+(?:\.\d+){0,2})\s*[,)]|'
+      r'\s*,\s*introduced\s*:\s*(\d+(?:\.\d+){0,2}))',
+      dotAll: true,
+    );
+    String? requiredVersion;
+    for (final file
+        in sources
+            .listSync(recursive: true, followLinks: false)
+            .whereType<File>()
+            .where((file) => p.extension(file.path) == '.swift')) {
+      // Ignore declarations and attributes in comments. Replacing rather than
+      // deleting preserves line boundaries for the adjacency check below.
+      final source = file.readAsStringSync().replaceAllMapped(
+        RegExp(r'/\*[\s\S]*?\*/|//[^\r\n]*'),
+        (match) => match[0]!.replaceAll(RegExp(r'[^\r\n]'), ' '),
+      );
+      var pendingAttributes = '';
+      for (final rawLine in source.split(RegExp(r'\r?\n'))) {
+        final line = rawLine.trim();
+        if (line.isEmpty) continue;
+        final match = declaration.firstMatch(line);
+        if (match != null &&
+            declarationPrefix.hasMatch(line.substring(0, match.start))) {
+          final attached =
+              '$pendingAttributes ${line.substring(0, match.start)}';
+          if (pendingAttributes.isEmpty ||
+              attributes.hasMatch(pendingAttributes)) {
+            for (final annotation in availability.allMatches(attached)) {
+              final version = annotation[1] ?? annotation[2]!;
+              if (requiredVersion == null ||
+                  _compareIosVersions(version, requiredVersion) > 0) {
+                requiredVersion = version;
+              }
+            }
+          }
+          pendingAttributes = '';
+          continue;
+        }
+        if (line.startsWith('@') ||
+            (pendingAttributes.isNotEmpty &&
+                !attributes.hasMatch(pendingAttributes))) {
+          pendingAttributes = '$pendingAttributes $line'.trim();
+          if (!pendingAttributes.startsWith('@') ||
+              pendingAttributes.contains(';') ||
+              pendingAttributes.contains('{') ||
+              pendingAttributes.contains('}')) {
+            pendingAttributes = '';
+          }
+        } else {
+          // An intervening declaration owns any attributes above it.
+          pendingAttributes = '';
+        }
+      }
+    }
+    return requiredVersion;
+  }
+
+  static int _compareIosVersions(String left, String right) {
+    final a = left.split('.').map(int.parse).toList();
+    final b = right.split('.').map(int.parse).toList();
+    for (var index = 0; index < 3; index++) {
+      final difference =
+          (index < a.length ? a[index] : 0) - (index < b.length ? b[index] : 0);
+      if (difference != 0) return difference;
+    }
+    return 0;
+  }
+
   /// Whether this plugin's own pubspec declares a native iOS `pluginClass`,
   /// i.e. it is expected to contribute native code to the build.
   ///

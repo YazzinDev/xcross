@@ -434,6 +434,20 @@ void main() {
   });
 
   group('effectiveEnvironment', () {
+    test('reads differently cased Windows environment keys', () {
+      expect(
+        ProcessRunner.environmentValue(const {'Path': 'configured'}, 'PATH'),
+        'configured',
+      );
+      expect(
+        ProcessRunner.environmentValue(const {
+          'Path': 'old',
+          'PATH': 'new',
+        }, 'PATH'),
+        'new',
+      );
+    });
+
     test('preserves host environment without configuration', () {
       expect(ProcessRunner.effectiveEnvironment, same(Platform.environment));
     });
@@ -478,6 +492,32 @@ void main() {
   });
 
   group('run', () {
+    test('replaces differently cased Windows environment overrides', () async {
+      if (!Platform.isWindows) return;
+      final directory = Directory.systemTemp.createTempSync('process-path-');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final script = File(p.join(directory.path, 'environment.dart'))
+        ..writeAsStringSync(
+          "import 'dart:io'; void main() { "
+          'final paths = Platform.environment.entries.where((e) => '
+          "e.key.toUpperCase() == 'PATH').toList(); "
+          r"stdout.write('${paths.length}|${paths.single.value}'); }",
+        );
+      ProcessRunner.configure(
+        normalizedTools: const {},
+        effectiveChildEnvironment: const {'Path': 'configured'},
+      );
+
+      final result = await ProcessRunner.run(
+        Platform.resolvedExecutable,
+        [script.path],
+        environment: const {'PATH': 'local'},
+      );
+
+      expect(result.exitCode, 0, reason: result.stderr);
+      expect(result.stdout, '1|local');
+    });
+
     test(
       'captures stdout/stderr and the exit code of a real process',
       () async {

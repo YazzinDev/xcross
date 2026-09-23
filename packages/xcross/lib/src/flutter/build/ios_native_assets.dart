@@ -153,7 +153,10 @@ final class IosNativeAssetsBuilder {
         'FLUTTER_ROOT': workspace.flutterRoot,
         'PATH': _prependPath(
           shimDirectory,
-          ProcessRunner.effectiveEnvironment['PATH'],
+          ProcessRunner.environmentValue(
+            ProcessRunner.effectiveEnvironment,
+            'PATH',
+          ),
         ),
       },
       inheritStdio: Log.isVerbose,

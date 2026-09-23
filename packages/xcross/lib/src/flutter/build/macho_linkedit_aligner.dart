@@ -89,6 +89,9 @@ abstract final class MachOLinkeditAligner {
     ) {
       if (bytes[offset] != 0) return false;
     }
+    // At least one terminator must remain inside the shortened table. With
+    // only three padding bytes, the fourth removed NUL ends the final name.
+    if (bytes[tailStart - 1] != 0) return false;
 
     // Nothing may live between the indirect symbol table and the strings, or
     // sliding the strings forward would overwrite it.
