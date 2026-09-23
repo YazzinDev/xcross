@@ -77,12 +77,11 @@ final class GdbReplyPacket {
     null => 'unknown signal',
   };
 
-  /// Whether this stop is a fault rather than an expected debugger pause.
-  /// A bare first SIGTRAP may be an attach hand-off; a Mach exception is not.
+  /// Whether this stop must be reported rather than resumed as an attach pause.
+  /// A bare first SIGTRAP may be an attach hand-off; a named stop is not.
   bool get isFatalStop => switch (stopSignal) {
     null => type == GdbReply.stopped,
-    5 =>
-      stopFields.containsKey('metype') || stopFields['reason'] == 'exception',
+    5 => stopFields.containsKey('metype') || stopFields.containsKey('reason'),
     _ => true,
   };
 

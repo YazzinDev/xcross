@@ -97,6 +97,32 @@ void main() {
     expect(received.toString(), isNot(contains(r'$c#63')));
   });
 
+  test('does not continue named or unknown SIGTRAP stops', () async {
+    for (final reason in ['breakpoint', 'watchpoint', 'unknown']) {
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final accepted = server.first;
+      final gdb = GdbRemoteClient(host: '127.0.0.1', port: server.port);
+      await gdb.connect();
+      final socket = await accepted;
+      final received = StringBuffer();
+      socket.listen((bytes) => received.write(String.fromCharCodes(bytes)));
+      final console = SessionConsole(
+        gdb: gdb,
+        hotReload: null,
+        listenForKeyboard: false,
+      );
+      final run = console.run();
+      socket.add(_frame('T05thread:1;reason:$reason;').codeUnits);
+      await socket.flush();
+      await run.timeout(const Duration(seconds: 2));
+      expect(console.isStopped, isTrue);
+      expect(received.toString(), isNot(contains(r'$c#63')));
+      await gdb.close();
+      socket.destroy();
+      await server.close();
+    }
+  });
+
   test(
     'reports a repeated SIGTRAP without sending a second continue',
     () async {

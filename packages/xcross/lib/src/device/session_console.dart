@@ -177,7 +177,7 @@ final class SessionConsole {
                 repeated > 0 ||
                 _resumedStops.length >= _maxAutomaticResumes ||
                 _resumePending) {
-              _reportCrash(reply.stopDescription);
+              _reportStop(reply);
               _stop();
               finish();
             } else {
@@ -214,19 +214,33 @@ final class SessionConsole {
     } on Object catch (_) {}
   }
 
-  /// Report a fatal stop with whatever the app said on its way down.
+  /// Report an unexpected stop with whatever the app said on its way down.
   ///
   /// The signal name alone ("SIGABRT") is not actionable: every uncaught
   /// Objective-C exception, failed plugin assertion and misconfigured SDK
   /// looks identical. The device log carries the actual reason, so it is
-  /// printed with the crash instead of being discarded.
-  void _reportCrash(String description) {
-    Log.logError(
-      'App crashed: $description. The process is stopped at the fault.',
-    );
-    final reason = crashReason?.call();
-    if (reason != null) {
-      Log.logError(reason);
+  /// printed with the stop instead of being discarded.
+  void _reportStop(GdbReplyPacket reply) {
+    final reason = reply.stopFields['reason'];
+    final debuggerStop =
+        reply.stopSignal == 5 &&
+        reason != null &&
+        reason != 'exception' &&
+        !reply.stopFields.containsKey('metype');
+    if (debuggerStop) {
+      Log.logError(
+        'App stopped: ${reply.stopDescription} ($reason). '
+        'The process is stopped by the debugger.',
+      );
+    } else {
+      Log.logError(
+        'App crashed: ${reply.stopDescription}. '
+        'The process is stopped at the fault.',
+      );
+    }
+    final crashDetail = crashReason?.call();
+    if (crashDetail != null) {
+      Log.logError(crashDetail);
       return;
     }
     final recent = recentDeviceLines?.call() ?? const <String>[];
