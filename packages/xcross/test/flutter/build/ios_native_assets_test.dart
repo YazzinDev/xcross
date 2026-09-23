@@ -450,6 +450,10 @@ void main() {
       );
 
       final clang = File(p.join(shims.path, 'clang.exe'));
+      expect(
+        File(p.join(shims.path, 'xcrun.exe.sdk')).readAsStringSync(),
+        r'C:\SDK\iPhoneOS.sdk',
+      );
       expect(clang.existsSync(), isTrue);
       expect(File(p.join(shims.path, 'cc.exe')).existsSync(), isTrue);
       expect(File(p.join(shims.path, 'clang.bat')).existsSync(), isFalse);

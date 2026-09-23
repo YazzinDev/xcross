@@ -21,6 +21,13 @@ const sdkIncludedRoots = <String>[
   'Developer/Toolchains/XcodeDefault.xctoolchain/usr/include',
 ];
 
+/// Swift's platform registry needs the descriptors of the imported platform
+/// and toolchain as well as their SDK and library subtrees.
+const sdkIncludedFiles = <String>[
+  'Developer/Platforms/iPhoneOS.platform/Info.plist',
+  'Developer/Toolchains/XcodeDefault.xctoolchain/Info.plist',
+];
+
 const _platformDeveloper = 'Developer/Platforms/iPhoneOS.platform/Developer';
 const _toolchain = 'Developer/Toolchains/XcodeDefault.xctoolchain';
 const _swiftResources = '$_toolchain/usr/lib/swift';
@@ -53,9 +60,17 @@ const swiftSdkMismatchMarker = 'this SDK is not supported by the compiler';
 /// Helpers for extracting and wiring the Darwin Swift SDK bundle.
 abstract final class SdkInstall {
   /// Destination-relative path for an included cpio entry, or null when the
-  /// entry is outside [sdkIncludedRoots].
+  /// entry is outside [sdkIncludedRoots] and [sdkIncludedFiles].
   static String? sdkRelativePath(String name) {
     final archiveName = name.replaceAll(r'\', '/');
+    for (final file in sdkIncludedFiles) {
+      if (archiveName == file) return file;
+      final anchor = '/$file';
+      final first = archiveName.indexOf('/Developer/');
+      if (first >= 0 && archiveName.indexOf(anchor, first) == first) {
+        return file;
+      }
+    }
     for (final root in sdkIncludedRoots) {
       if (archiveName == root || archiveName.startsWith('$root/')) {
         return archiveName;
@@ -86,6 +101,7 @@ abstract final class SdkInstall {
     await Directory(ioPath(root)).create(recursive: true);
     final links = <String, String>{};
     final hardLinks = HardLinkPayloads();
+    final descriptors = <String, String>{};
     var written = 0;
     var patchedStubs = 0;
 
@@ -99,6 +115,17 @@ abstract final class SdkInstall {
       );
       final destPath = _destinationPath(root, entry);
       if (destPath == null) continue;
+      if (sdkIncludedFiles.any(
+        (file) => destPath.endsWith(file.replaceAll('/', p.separator)),
+      )) {
+        final previous = descriptors[destPath];
+        if (previous != null && previous != entry.name) {
+          throw XcrossError(
+            'Conflicting SDK descriptor entries: $previous and ${entry.name}',
+          );
+        }
+        descriptors[destPath] = entry.name;
+      }
 
       // Text stubs are rewritten on the way in rather than in a pass over
       // the installed tree: the bytes here are the hard-link group's shared
@@ -135,6 +162,8 @@ abstract final class SdkInstall {
 
     if (materializeLinks ?? Platform.isWindows) {
       await _materializeSdkLinks(root, links, onProgress: onLinkProgress);
+      // Keep both names: callers may reference the canonical iPhoneOS.sdk
+      // directly even when discovery prefers its versioned counterpart.
     } else {
       var linked = 0;
       for (final link in links.entries) {
@@ -157,7 +186,7 @@ abstract final class SdkInstall {
   }
 
   /// Absolute destination for an included cpio entry, or null when the entry
-  /// is outside [sdkIncludedRoots].
+  /// is outside [sdkIncludedRoots] and [sdkIncludedFiles].
   ///
   /// Rejects `..` segments and anything resolving outside [root] so a hostile
   /// archive cannot write over arbitrary host files.
@@ -215,6 +244,39 @@ abstract final class SdkInstall {
         );
       }
     }
+  }
+
+  /// Unversioned SDK directories duplicated by link materialization.
+  ///
+  /// Only directory aliases directly under an SDKs directory qualify. The
+  /// platform name is irrelevant: device and simulator layouts use the same
+  /// versioned/unversioned alias convention.
+  static Set<String> materializedSdkAliases(
+    String root,
+    Map<String, String> links,
+  ) {
+    final aliases = <String>{};
+    final versioned = RegExp(r'^(.+?)[0-9]+(?:\.[0-9]+)*\.sdk$');
+    for (final link in links.entries) {
+      final target = _resolvedSdkLinkTarget(root, link.key, link.value);
+      final parent = p.dirname(link.key);
+      if (!p.isWithin(root, link.key) ||
+          p.basename(parent) != 'SDKs' ||
+          parent != p.dirname(target)) {
+        continue;
+      }
+      final linkName = p.basename(link.key);
+      final targetName = p.basename(target);
+      final linkVersion = versioned.firstMatch(linkName);
+      final targetVersion = versioned.firstMatch(targetName);
+      if (linkVersion != null && targetName == '${linkVersion[1]}.sdk') {
+        aliases.add(target);
+      } else if (targetVersion != null &&
+          linkName == '${targetVersion[1]}.sdk') {
+        aliases.add(link.key);
+      }
+    }
+    return aliases;
   }
 
   /// Resolves a link target and rejects anything reaching outside the bundle.

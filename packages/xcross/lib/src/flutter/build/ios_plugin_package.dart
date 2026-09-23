@@ -11,6 +11,7 @@ import 'package:propertylistserialization/propertylistserialization.dart';
 import 'package:xcross/src/cli/basic/sdk_install.dart';
 import 'package:xcross/src/flutter/build/internal/host_symlink_capability.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
+import 'package:xcross/src/flutter/build/internal/windows_swift_plan_repair.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
 import 'package:xcross/src/flutter/build/ios_linker_compatibility.dart';
 import 'package:xcross/src/flutter/build/ios_plugins.dart';
@@ -33,6 +34,17 @@ const String _flutterFrameworkPackageName = 'FlutterFramework';
 /// Name of our aggregate package/product/target that pulls in every SPM
 /// plugin's native code.
 const String _pluginsProductName = 'FlutterPluginsGenerated';
+
+String _prependPathEntry(
+  String directory,
+  String? path, {
+  required bool windows,
+}) => path == null || path.isEmpty
+    ? directory
+    // `pathSeparator` joins a directory's components (`\\` on Windows), not
+    // entries in PATH (`;` on Windows). A malformed PATH made the bundled
+    // xcrun unreachable as soon as another entry followed it.
+    : '$directory${windows ? ';' : ':'}$path';
 
 /// Result of building the aggregate Flutter-plugins Swift package.
 typedef SwiftPmDependencyRefEvaluator =
@@ -291,7 +303,8 @@ abstract final class GeneratedPluginsPackage {
       input.add(const [0]);
     }
 
-    add('xcross-swiftpm-build-v6');
+    // v7 invalidates dylibs compiled with availability guards disabled.
+    add('xcross-swiftpm-build-v7');
     add(objectiveCLinkerSwiftDriverArguments.join('\u0001'));
     if (Platform.isLinux) {
       add(objectiveCSmallStubSwiftDriverArguments.join('\u0001'));
@@ -466,7 +479,6 @@ abstract final class GeneratedPluginsPackage {
         environment: environment,
       );
     }
-    final targetBuildDir = resolveTargetBuildDir(scratchPath);
     final baseArguments = swiftBuildArguments(
       pluginsDir: pluginsDir,
       scratchPath: scratchPath,
@@ -488,6 +500,8 @@ abstract final class GeneratedPluginsPackage {
         label: 'swift build plan',
       ),
     );
+    // Inspect the plan just emitted, not a directory from an earlier build.
+    final targetBuildDir = resolveTargetBuildDir(scratchPath);
     await repairWindowsGeneratedBuildFiles(
       scratchPath,
       targetBuildDir,
@@ -534,7 +548,7 @@ abstract final class GeneratedPluginsPackage {
         swiftBuild,
         arguments,
         environment: environment,
-        inheritStdio: windows && Log.isVerbose,
+        captureAndEcho: windows && Log.isVerbose,
         label: 'swift build',
       );
       await repairWindowsGeneratedBuildFiles(
@@ -584,54 +598,39 @@ abstract final class GeneratedPluginsPackage {
     String scratchPath,
     String targetBuildDir, {
     bool? windows,
-  }) async {
-    if (!(windows ?? Platform.isWindows)) return false;
-    final root = Directory(targetBuildDir);
-    if (!root.existsSync()) return false;
-    var changed = false;
-    for (final json in [
-      ...root
-          .listSync(recursive: true, followLinks: false)
-          .whereType<File>()
-          .where((file) => p.extension(file.path) == '.json'),
-      File(
-        p.join(
-          scratchPath,
-          'x86_64-unknown-windows-msvc',
-          'debug',
-          'plugin-tools-description.json',
-        ),
-      ),
-    ]) {
-      if (!json.existsSync()) continue;
-      final original = await json.readAsString();
-      final normalized = original.replaceAll(r'\\\\?\\C:\\?\\C:\\', r'C:\\');
-      if (normalized != original) {
-        await json.writeAsString(normalized);
-        changed = true;
-      }
-    }
-    for (final accessor
-        in root
-            .listSync(recursive: true, followLinks: false)
-            .whereType<File>()
-            .where(
-              (file) => p.basename(file.path) == 'resource_bundle_accessor.m',
-            )) {
-      final original = await accessor.readAsString();
-      final normalized = original
-          .replaceAll(r'\', '/')
-          .replaceAll(
-            '#import <Foundation/Foundation.h>',
-            '#include <Foundation/Foundation.h>',
-          );
-      if (normalized != original) {
-        await accessor.writeAsString(normalized);
-        changed = true;
-      }
-    }
-    return changed;
-  }
+  }) => WindowsSwiftPlanRepair.repairWindowsGeneratedBuildFiles(
+    scratchPath,
+    targetBuildDir,
+    windows: windows,
+  );
+
+  @visibleForTesting
+  static Future<bool> repairWindowsSwiftResponseFiles(
+    String scratchPath, {
+    bool? windows,
+  }) => WindowsSwiftPlanRepair.repairWindowsSwiftResponseFiles(
+    scratchPath,
+    windows: windows,
+  );
+
+  @visibleForTesting
+  static int windowsCommandLineLength(List<String> arguments) =>
+      WindowsSwiftPlanRepair.windowsCommandLineLength(arguments);
+
+  @visibleForTesting
+  static String normalizeWindowsDirectoryCopyInputs(String description) =>
+      WindowsSwiftPlanRepair.normalizeWindowsDirectoryCopyInputs(description);
+
+  @visibleForTesting
+  static Future<String> stageWindowsDirectoryCopyInputs(
+    String description,
+    String scratchPath, {
+    bool? windows,
+  }) => WindowsSwiftPlanRepair.stageWindowsDirectoryCopyInputs(
+    description,
+    scratchPath,
+    windows: windows,
+  );
 
   /// Swift reports a toolchain/SDK ABI mismatch once per importing file and
   /// never names the cause a user can act on, so replace it with the one
@@ -1381,10 +1380,10 @@ abstract final class GeneratedPluginsPackage {
   }) async {
     final repair = repairConsumers ?? () async {};
 
-    Future<bool> recoverMissingTargets() async {
+    Future<bool> recoverMissingTargets({Set<String>? candidates}) async {
       final targets = missingSwiftInteropTargets(
         targetBuildDir,
-        candidates: interopTargetCandidates,
+        candidates: candidates ?? interopTargetCandidates,
       );
       for (final target in targets) {
         await buildTarget(target);
@@ -1404,8 +1403,12 @@ abstract final class GeneratedPluginsPackage {
     final planned = plannedSwiftInteropTargets(
       targetBuildDir,
       candidates: interopTargetCandidates,
+      windows: windows,
     );
-    for (final target in planned) {
+    final prebuild = (windows ?? Platform.isWindows)
+        ? orderedWindowsSwiftInteropTargets(targetBuildDir, planned)
+        : planned;
+    for (final target in prebuild) {
       await buildTarget(target);
     }
     await repair();
@@ -1415,12 +1418,40 @@ abstract final class GeneratedPluginsPackage {
     }
 
     final before = swiftInteropSearchPaths(targetBuildDir).toSet();
+    final missingBefore = missingSwiftInteropTargets(
+      targetBuildDir,
+      candidates: interopTargetCandidates,
+    ).toSet();
     try {
       await build();
-    } on Object {
-      if (await recoverMissingTargets()) {
-        await build();
-        return;
+    } on Object catch (error, stack) {
+      final diagnostic = error.toString();
+      final missingHeader = RegExp(
+        r'[A-Za-z_0-9-]+-Swift\.h[^\n]*(?:file not found|not found|No such file)',
+        caseSensitive: false,
+      ).hasMatch(diagnostic);
+      final newlyExposed = missingSwiftInteropTargets(
+        targetBuildDir,
+        candidates: interopTargetCandidates,
+      ).toSet().difference(missingBefore);
+      if (!missingHeader && newlyExposed.isEmpty) rethrow;
+      // Internal targets may be absent from public products, but must still
+      // be reachable from the generated aggregate build plan.
+      final reachable = plannedTargetClosure(
+        targetBuildDir,
+        _pluginsProductName,
+      );
+      final candidates = {
+        ...interopTargetCandidates,
+        if (reachable != null) ...reachable,
+      };
+      try {
+        if (await recoverMissingTargets(candidates: candidates)) {
+          await build();
+          return;
+        }
+      } on Object {
+        Error.throwWithStackTrace(error, stack);
       }
       final emitted = swiftInteropSearchPaths(
         targetBuildDir,
@@ -1428,7 +1459,11 @@ abstract final class GeneratedPluginsPackage {
       if (!(windows ?? Platform.isWindows) || emitted.isEmpty) {
         rethrow;
       }
-      await repair();
+      try {
+        await repair();
+      } on Object {
+        Error.throwWithStackTrace(error, stack);
+      }
       await build();
     }
   }
@@ -1469,7 +1504,9 @@ abstract final class GeneratedPluginsPackage {
           basename.length - '-Swift.h'.length,
         );
         if (reachable != null && !reachable.contains(target)) continue;
-        if (candidates.contains(target)) targets.add(target);
+        if (candidates.contains(target)) {
+          targets.add(target);
+        }
       }
     }
     final sorted = targets.toList()..sort();
@@ -1634,11 +1671,19 @@ abstract final class GeneratedPluginsPackage {
       sourceFallbackOverride ?? Platform.isWindows;
 
   /// Process-local settings for SwiftPM dependency checkout: the
-  /// non-interactive Git settings every host needs, plus the Windows
-  /// symlink and sentry-cocoa source-build manifest lane.
-  static Map<String, String>? swiftProcessEnvironment({bool? windows}) {
+  /// non-interactive Git settings every host needs, plus Windows checkout
+  /// compatibility settings for symlinks and source-build manifests.
+  static Map<String, String>? swiftProcessEnvironment({
+    bool? windows,
+    String? executable,
+    Map<String, String>? environment,
+  }) {
     final onWindows = windows ?? Platform.isWindows;
     final config = _gitConfigEntries(windows: onWindows);
+    final bundledTools = p.dirname(executable ?? Platform.resolvedExecutable);
+    final bundledXcrun = File(
+      p.join(bundledTools, onWindows ? 'xcrun.exe' : 'xcrun'),
+    );
     return {
       ...nonInteractiveGitEnvironment,
       'GIT_CONFIG_COUNT': '${config.length}',
@@ -1647,6 +1692,18 @@ abstract final class GeneratedPluginsPackage {
         'GIT_CONFIG_VALUE_$index': entry.value,
       },
       if (onWindows) 'EXPERIMENTAL_SPM_BUILDS': '1',
+      // SwiftPM build tools call `xcrun` through PATH. Prefer the xcrun
+      // bundled beside this executable over a separately installed version,
+      // which may not understand the iPhoneOS platform probes.
+      if (onWindows && bundledXcrun.existsSync())
+        'PATH': _prependPathEntry(
+          bundledTools,
+          ProcessRunner.environmentValue(
+            environment ?? ProcessRunner.effectiveEnvironment,
+            'PATH',
+          ),
+          windows: onWindows,
+        ),
     };
   }
 
@@ -1841,6 +1898,7 @@ abstract final class GeneratedPluginsPackage {
   static List<String> plannedSwiftInteropTargets(
     String targetBuildDir, {
     required Set<String> candidates,
+    bool? windows,
   }) {
     // The plan is an optimisation for the prepass, not a requirement: without
     // it the existing after-the-fact recovery still runs. A build directory
@@ -1869,16 +1927,67 @@ abstract final class GeneratedPluginsPackage {
       final owner = p.basename(p.dirname(argument));
       if (!owner.endsWith('.build')) continue;
       final target = owner.substring(0, owner.length - '.build'.length);
-      if (!candidates.contains(target)) continue;
-      // A null closure means the plan carried no dependency map to filter
-      // with, so fall back to the unfiltered set rather than skipping the
-      // prepass and reintroducing the race.
+      // A generated aggregate may reach an internal Swift target through a
+      // product even though that target is not itself a public product.
+      // Windows must include reachable internal Swift header targets,
+      // including when older plans carry no dependency map. Preserve the
+      // public-product candidate filter on POSIX hosts for every plan.
+      if (!(windows ?? Platform.isWindows) && !candidates.contains(target)) {
+        continue;
+      }
       if (reachable != null && !reachable.contains(target)) continue;
       if (File(p.join(argument, '$target-Swift.h')).existsSync()) continue;
       targets.add(target);
     }
     final sorted = targets.toList()..sort();
     return sorted;
+  }
+
+  /// The aggregate target is the build that follows this prepass, never a
+  /// prebuild target. Build reachable Swift dependencies before consumers
+  /// even when alphabetical names would schedule them in reverse.
+  @visibleForTesting
+  static List<String> orderedWindowsSwiftInteropTargets(
+    String targetBuildDir,
+    List<String> planned,
+  ) {
+    final eligible = planned.toSet()..remove(_pluginsProductName);
+    final description = File(p.join(targetBuildDir, 'description.json'));
+    Map<String, dynamic>? dependencies;
+    try {
+      final decoded = jsonDecode(description.readAsStringSync());
+      if (decoded is Map<String, dynamic>) {
+        dependencies = decoded['targetDependencyMap'] as Map<String, dynamic>?;
+      }
+    } on Object {
+      // Preserve the prepass for older SwiftPM descriptions with no map.
+    }
+    final ordered = <String>[];
+    final visited = <String>{};
+    final visiting = <String>{};
+
+    void visit(String target) {
+      if (!eligible.contains(target) || visited.contains(target)) return;
+      if (!visiting.add(target)) {
+        throw FlutterBuildError(
+          'SwiftPM interop target dependency cycle at $target',
+        );
+      }
+      final children = dependencies?[target];
+      if (children is List) {
+        for (final dependency in children.whereType<String>()) {
+          visit(dependency);
+        }
+      }
+      visiting.remove(target);
+      visited.add(target);
+      ordered.add(target);
+    }
+
+    for (final target in planned) {
+      visit(target);
+    }
+    return ordered;
   }
 
   /// [root] and every target reachable from it in the plan's dependency map.
@@ -1935,6 +2044,33 @@ abstract final class GeneratedPluginsPackage {
       return false;
     }
     if (text.isEmpty) return false;
+    final responseDirectory = p.join(scratchPath, '.xcross-response');
+    final responseArguments = <String>{};
+    for (final line in text.split('\n')) {
+      const prefix = '    args: ';
+      if (!line.startsWith('$prefix[')) continue;
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(line.substring(prefix.length));
+      } on FormatException {
+        continue;
+      }
+      if (decoded is! List) continue;
+      for (final argument in decoded.whereType<String>()) {
+        if (!argument.startsWith('@')) continue;
+        final path = p.normalize(p.absolute(argument.substring(1)));
+        if (!p.isWithin(p.absolute(responseDirectory), path) ||
+            FileSystemEntity.isLinkSync(path) ||
+            !RegExp(r'^[a-f0-9]{64}\.rsp$').hasMatch(p.basename(path))) {
+          continue;
+        }
+        try {
+          responseArguments.addAll(File(path).readAsLinesSync());
+        } on FileSystemException {
+          return false;
+        }
+      }
+    }
     var checked = 0;
     // [plannedSwiftInteropSearchPaths] emits each include as the quadruple
     // `-Xcc -I -Xcc <path>`, so the path follows the `-I` across the `-Xcc`
@@ -1943,7 +2079,16 @@ abstract final class GeneratedPluginsPackage {
       if (interopArguments[index] != '-I') continue;
       if (interopArguments[index + 1] != '-Xcc') continue;
       checked++;
-      if (!text.contains(jsonEncode(interopArguments[index + 2]))) return false;
+      final path = interopArguments[index + 2];
+      if (!text.contains(jsonEncode(path)) &&
+          !responseArguments.contains(
+            WindowsSwiftPlanRepair.quoteWindowsArgument(path),
+          ) &&
+          !responseArguments.contains(
+            WindowsSwiftPlanRepair.quoteGnuArgument(path),
+          )) {
+        return false;
+      }
     }
     return checked > 0;
   }
@@ -2104,10 +2249,9 @@ abstract final class GeneratedPluginsPackage {
     '-F',
     '-Xcc',
     flutterFrameworkSlice,
-    '-Xswiftc',
-    '-Xfrontend',
-    '-Xswiftc',
-    '-disable-availability-checking',
+    // Preserve Swift #available runtime guards. Disabling availability checks
+    // also removes these guards and can call newer weak-linked APIs on older
+    // operating systems where those weak-linked APIs do not exist.
     // Swift uses clang as its link driver. Pin that driver too, otherwise a
     // macOS host reselects MacOSX.sdk while linking iOS plugin products.
     '-Xswiftc',
@@ -2394,33 +2538,48 @@ abstract final class GeneratedPluginsPackage {
         );
       }
       final scoped = evaluateDependencyRefs;
-      final unified = await resolveUnifiedDependencyRefs(
-        resolveRoot: p.join(outputDir, 'Resolve'),
-        packageDirectories: prestaged,
-        evaluate: (directory, dependencies) => scoped != null
-            ? scoped(
-                directory,
-                scratchPath: scratchPath,
-                binaryArtifactStore: binaryArtifactStore,
-                binaryArtifactFallback: binaryArtifactFallback,
-                swiftPmArtifactJunctionCapability:
-                    swiftPmArtifactJunctionCapability,
-                packageLocalArtifactJunctionCapability:
-                    packageLocalArtifactJunctionCapability,
-                dependencies: dependencies,
-              )
-            : _evaluatedDependencyRefs(
-                directory,
-                ProcessRunner.locateTool,
-                scratchPath: scratchPath,
-                binaryArtifactStore: binaryArtifactStore,
-                binaryArtifactFallback: binaryArtifactFallback,
-                swiftPmArtifactJunctionCapability:
-                    swiftPmArtifactJunctionCapability,
-                dependencies: dependencies,
-              ),
-      );
-      if (unified != null) {
+      final bootstrap = windows
+          ? await bootstrapWindowsPinnedDependencyResolve(
+              prestaged,
+              resolvedVendorDir,
+              clonePackage: clonePackage,
+            )
+          : (pins: <String, String>{}, originals: <String, String>{});
+      Map<String, String>? unified;
+      try {
+        unified = await resolveUnifiedDependencyRefs(
+          resolveRoot: p.join(outputDir, 'Resolve'),
+          packageDirectories: prestaged,
+          evaluate: (directory, dependencies) => scoped != null
+              ? scoped(
+                  directory,
+                  scratchPath: scratchPath,
+                  binaryArtifactStore: binaryArtifactStore,
+                  binaryArtifactFallback: binaryArtifactFallback,
+                  swiftPmArtifactJunctionCapability:
+                      swiftPmArtifactJunctionCapability,
+                  packageLocalArtifactJunctionCapability:
+                      packageLocalArtifactJunctionCapability,
+                  dependencies: dependencies,
+                )
+              : _evaluatedDependencyRefs(
+                  directory,
+                  ProcessRunner.locateTool,
+                  scratchPath: scratchPath,
+                  binaryArtifactStore: binaryArtifactStore,
+                  binaryArtifactFallback: binaryArtifactFallback,
+                  swiftPmArtifactJunctionCapability:
+                      swiftPmArtifactJunctionCapability,
+                  dependencies: dependencies,
+                ),
+        );
+      } finally {
+        for (final entry in bootstrap.originals.entries) {
+          await _writeStable(entry.key, entry.value);
+        }
+      }
+      final pinned = {...?unified, ...bootstrap.pins};
+      if (pinned.isNotEmpty) {
         pluginRefEvaluator =
             (
               _, {
@@ -2430,7 +2589,7 @@ abstract final class GeneratedPluginsPackage {
               required swiftPmArtifactJunctionCapability,
               required packageLocalArtifactJunctionCapability,
               required dependencies,
-            }) async => unified;
+            }) async => pinned;
       }
     }
 
@@ -2504,6 +2663,112 @@ abstract final class GeneratedPluginsPackage {
       deploymentTarget: deploymentTarget,
       verbose: verbose,
     );
+  }
+
+  /// SwiftPM evaluates remote manifests before checkout normalization can fix
+  /// host-incompatible declarations. Prestage deterministically pinned Git
+  /// dependencies through normalized local checkouts for the resolve pass,
+  /// then restore the original plugin manifests for normal vendoring. Leave
+  /// version ranges to SwiftPM's solver rather than choosing a version here.
+  @visibleForTesting
+  static Future<({Map<String, String> pins, Map<String, String> originals})>
+  bootstrapWindowsPinnedDependencyResolve(
+    Iterable<String> packageDirectories,
+    String vendorDir, {
+    bool? windows,
+    Future<void> Function(
+      String git,
+      String url,
+      String ref,
+      String destination,
+    )?
+    clonePackage,
+  }) async {
+    if (!(windows ?? Platform.isWindows)) {
+      return (pins: <String, String>{}, originals: <String, String>{});
+    }
+    final originals = <String, String>{};
+    final rewrites = <String, String>{};
+    final pins = <String, String>{};
+    final replacements = <String, String>{};
+    final manifests = <String, String>{};
+    final urls = <String, String>{};
+    final products = <String, Set<String>>{};
+    final unpinned = <String>{};
+    String? git;
+    for (final directory in packageDirectories) {
+      final manifestFile = File(p.join(directory, 'Package.swift'));
+      if (!manifestFile.existsSync()) continue;
+      final original = await manifestFile.readAsString();
+      manifests[manifestFile.path] = original;
+      for (final dependency in parseUrlPackageDeps(original)) {
+        final identity = _canonicalGitUrl(dependency.url);
+        final ref = RegExp(
+          r'\b(?:exact|revision)\s*:\s*"([^"\r\n]+)"',
+        ).firstMatch(dependency.match)?[1];
+        if (ref == null) {
+          unpinned.add(identity);
+          continue;
+        }
+        final previousRef = pins[identity];
+        if (previousRef != null && previousRef != ref) {
+          throw FlutterBuildError(
+            'Conflicting pinned refs for $identity: $previousRef and $ref',
+          );
+        }
+        pins[identity] = ref;
+        urls.putIfAbsent(identity, () => dependency.url);
+        products
+            .putIfAbsent(identity, () => <String>{})
+            .addAll(_consumedProducts(original, dependency.identity));
+      }
+    }
+    // A range for the same URL must continue through SwiftPM's solver.
+    for (final identity in unpinned) {
+      pins.remove(identity);
+      urls.remove(identity);
+      products.remove(identity);
+    }
+    for (final entry in pins.entries) {
+      final identity = entry.key;
+      final ref = entry.value;
+      final url = urls[identity]!;
+      final destination = p.join(vendorDir, vendorPackageDirName(url, ref));
+      git ??= await ProcessRunner.locateTool('git');
+      await (clonePackage ?? _cloneGitPackage)(git, url, ref, destination);
+      await _normalizeVendoredPackageManifests(
+        destination,
+        consumedProducts: products[identity]!,
+      );
+      replacements[identity] = destination;
+    }
+    for (final entry in manifests.entries) {
+      var rewritten = entry.value;
+      for (final dependency in parseUrlPackageDeps(entry.value)) {
+        final identity = _canonicalGitUrl(dependency.url);
+        if (!replacements.containsKey(identity)) continue;
+        rewritten = rewritten.replaceAll(
+          dependency.match,
+          '.package(name: "${dependency.identity}", '
+          'path: "${_swiftPath(replacements[identity]!)}")',
+        );
+      }
+      if (rewritten != entry.value) {
+        originals[entry.key] = entry.value;
+        rewrites[entry.key] = rewritten;
+      }
+    }
+    try {
+      for (final entry in rewrites.entries) {
+        await _writeStable(entry.key, entry.value);
+      }
+    } on Object {
+      for (final entry in originals.entries) {
+        await _writeStable(entry.key, entry.value);
+      }
+      rethrow;
+    }
+    return (pins: pins, originals: originals);
   }
 
   /// Pins every URL dependency reachable from [packageDirectories] with a
@@ -3042,7 +3307,11 @@ abstract final class GeneratedPluginsPackage {
 
     await _writeStable(
       p.join(sourcesDir, 'GeneratedPluginRegistrant.swift'),
-      registrantSource(plugins, verbose: verbose),
+      registrantSource(
+        plugins,
+        verbose: verbose,
+        stagedPackageDirs: pluginPackageDirs,
+      ),
     );
   }
 
@@ -4881,7 +5150,7 @@ let package = Package(
     String fingerprintOf(String identity) => sha256
         .convert(
           utf8.encode(
-            'xcross-symlink-materialization-v2\u0000'
+            'xcross-symlink-materialization-v3\u0000'
             '${Platform.operatingSystem}\u0000$mode\u0000$identity',
           ),
         )
@@ -4968,7 +5237,11 @@ let package = Package(
     } on FormatException {
       return false;
     }
-    if (decoded is! Map || decoded['fingerprint'] != fingerprint) return false;
+    if (decoded is! Map ||
+        decoded['version'] != 3 ||
+        decoded['fingerprint'] != fingerprint) {
+      return false;
+    }
     final links = decoded['links'];
     if (links is! List) return false;
     for (final entry in links) {
@@ -4976,8 +5249,13 @@ let package = Package(
       final path = entry['path'];
       final kind = entry['kind'];
       final target = entry['target'];
+      final directory = entry['directory'];
       if (path is! String || kind is! String || target is! String) return false;
-      if (!_linkIntact(path, kind, target, entry['directory'] == true)) {
+      if (kind == _stampKindSymlink && !entry.containsKey('directory')) {
+        return false;
+      }
+      if (directory != null && directory is! bool) return false;
+      if (!_linkIntact(path, kind, target, directory: directory as bool?)) {
         return false;
       }
     }
@@ -4987,16 +5265,23 @@ let package = Package(
   static bool _linkIntact(
     String path,
     String kind,
-    String target,
-    bool directory,
-  ) {
+    String target, {
+    bool? directory,
+  }) {
     switch (kind) {
       case _stampKindSymlink:
-        return FileSystemEntity.isLinkSync(path) &&
-            Link(path).targetSync() == target &&
-            (directory
-                ? Directory(path).existsSync()
-                : File(path).existsSync());
+        if (!FileSystemEntity.isLinkSync(path) ||
+            Link(path).targetSync() != target) {
+          return false;
+        }
+        final resolved = p.normalize(p.absolute(p.dirname(path), target));
+        if (Directory(resolved).existsSync()) {
+          return directory != false && Directory(path).existsSync();
+        }
+        if (File(resolved).existsSync()) {
+          return directory != true && File(path).existsSync();
+        }
+        return directory == null;
       case _stampKindForwarder:
         final file = File(path);
         return !FileSystemEntity.isLinkSync(path) &&
@@ -5074,11 +5359,16 @@ let package = Package(
       resolved[link] = resolve(link, <String>{});
     }
 
+    // A real symlink can preserve a missing optional example. A link used by
+    // a declared package target, and every hard-link fallback, needs a target.
     for (final link in links.keys) {
       final target = resolved[link]!;
-      if (!Directory(target).existsSync() && !File(target).existsSync()) {
+      if (!Directory(target).existsSync() &&
+          !File(target).existsSync() &&
+          (!symlinks || _requiredPackageLink(root, link))) {
         throw FlutterBuildError(
-          'Symlink target does not exist in SwiftPM checkout: $link -> $target',
+          'Symlink target does not exist in SwiftPM checkout: $link -> '
+          '$target',
         );
       }
     }
@@ -5103,9 +5393,59 @@ let package = Package(
 
     await stamp.parent.create(recursive: true);
     await stamp.writeAsString(
-      jsonEncode({'fingerprint': fingerprint, 'links': records}),
+      jsonEncode({'version': 3, 'fingerprint': fingerprint, 'links': records}),
     );
     return changed;
+  }
+
+  static bool _requiredPackageLink(String root, String link) {
+    final manifest = File(p.join(root, 'Package.swift'));
+    if (!manifest.existsSync()) return true;
+    final source = manifest.readAsStringSync();
+    final calls = [
+      for (final kind in ['.target', '.executableTarget', '.macro'])
+        ..._swiftCalls(source, kind),
+    ];
+    // Plugin builds never compile SwiftPM test targets. A checkout containing
+    // only tests may therefore keep their dangling fixture/example links.
+    if (calls.isEmpty) return _swiftCalls(source, '.testTarget').isEmpty;
+    for (final call in calls) {
+      final name = _namedString(call.text, 'name');
+      final explicitPath = _namedString(call.text, 'path');
+      if (name == null && explicitPath == null) return true;
+      final targetRoot = p.normalize(
+        p.join(root, explicitPath ?? p.join('Sources', name)),
+      );
+      if (link != targetRoot && !p.isWithin(targetRoot, link)) continue;
+      final relative = p.relative(link, from: targetRoot);
+      final excluded = _namedStringList(call.text, 'exclude');
+      if (excluded.any(
+        (path) => p.equals(relative, path) || p.isWithin(path, relative),
+      )) {
+        continue;
+      }
+      final sources = _namedStringList(call.text, 'sources');
+      if (sources.isEmpty ||
+          sources.any(
+            (path) =>
+                p.equals(relative, path) ||
+                p.isWithin(path, relative) ||
+                p.isWithin(relative, path),
+          )) {
+        return true;
+      }
+      for (final resource in RegExp(
+        r'\.(?:process|copy)\(\s*"([^"]+)"',
+      ).allMatches(call.text)) {
+        final path = resource[1]!;
+        if (p.equals(relative, path) ||
+            p.isWithin(path, relative) ||
+            p.isWithin(relative, path)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /// Turns every placeholder into a real symlink carrying Git's own target
@@ -5127,9 +5467,8 @@ let package = Package(
     String linkText(String link) => Platform.isWindows
         ? targets[link]!.replaceAll('/', r'\')
         : targets[link]!;
-    bool isDirectory(String link) => Directory(resolved[link]!).existsSync();
     bool intact(String link) =>
-        _linkIntact(link, _stampKindSymlink, linkText(link), isDirectory(link));
+        _linkIntact(link, _stampKindSymlink, linkText(link));
 
     final pending = [
       for (final link in links.keys)
@@ -5140,7 +5479,11 @@ let package = Package(
         'path': link,
         'kind': _stampKindSymlink,
         'target': linkText(link),
-        'directory': isDirectory(link),
+        'directory': Directory(resolved[link]!).existsSync()
+            ? true
+            : File(resolved[link]!).existsSync()
+            ? false
+            : null,
       });
     }
     if (pending.isEmpty) return false;
@@ -5284,7 +5627,7 @@ let package = Package(
           'kind': _stampKindForwarder,
           'target': forwarder,
         });
-        if (_linkIntact(link, _stampKindForwarder, forwarder, false)) continue;
+        if (_linkIntact(link, _stampKindForwarder, forwarder)) continue;
         replace.add(link);
         forwarders.add((link, forwarder));
       } else {
@@ -5293,7 +5636,7 @@ let package = Package(
           'kind': _stampKindHardLink,
           'target': targets[link],
         });
-        if (_linkIntact(link, _stampKindHardLink, targets[link]!, false)) {
+        if (_linkIntact(link, _stampKindHardLink, targets[link]!)) {
           continue;
         }
         replace.add(link);
@@ -5822,6 +6165,7 @@ $targetDependencies            ]
   static String registrantSource(
     List<IosPlugin> plugins, {
     bool verbose = false,
+    Map<String, String> stagedPackageDirs = const {},
   }) {
     final imports = StringBuffer();
     final registrations = StringBuffer();
@@ -5831,8 +6175,9 @@ $targetDependencies            ]
       if (pluginClass == null) continue;
       pluginCount++;
       imports.writeln('import ${plugin.name}');
+      final registration = StringBuffer();
       if (verbose) {
-        registrations.writeln('''
+        registration.writeln('''
     NSLog("[xcross] registering plugin ${plugin.name} ($pluginClass)")
     if let registrar = registry.registrar(forPlugin: "$pluginClass") {
         $pluginClass.register(with: registrar)
@@ -5843,10 +6188,29 @@ $targetDependencies            ]
         NSLog("[xcross] failed plugin ${plugin.name} ($pluginClass): registrar unavailable")
     }''');
       } else {
-        registrations.writeln('''
+        registration.writeln('''
     if let registrar = registry.registrar(forPlugin: "$pluginClass") {
         $pluginClass.register(with: registrar)
     }''');
+      }
+      final availableFrom = plugin.pluginClassIosAvailabilityIn(
+        stagedPackage: stagedPackageDirs[plugin.name],
+      );
+      if (availableFrom == null) {
+        registrations.write(registration);
+      } else {
+        registrations.writeln('''
+    if #available(iOS $availableFrom, *) {''');
+        registrations.write(registration);
+        registrations.writeln('    } else {');
+        if (verbose) {
+          registrations.writeln(
+            '''
+        failures.append("${plugin.name} ($pluginClass): requires iOS $availableFrom")
+        NSLog("[xcross] skipped plugin ${plugin.name} ($pluginClass): requires iOS $availableFrom")''',
+          );
+        }
+        registrations.writeln('    }');
       }
     }
 

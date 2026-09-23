@@ -43,6 +43,7 @@ final class DarwinSdk {
   /// Resolve the SDK installed and owned by xcross, or null when incomplete.
   static DarwinSdk? current({String? bundle}) {
     final candidate = bundle ?? _installBundleOverride ?? nativeInstallDir();
+    restoreInterruptedInstall(candidate);
     final source = _canonicalLayout(candidate);
     final destination = _runtimeLayout(candidate);
     try {
@@ -60,6 +61,23 @@ final class DarwinSdk {
     // multi-gigabyte reinstall; a stamped bundle costs one small file read.
     TbdBundlePatch.ensureApplied(candidate);
     return DarwinSdk(candidate);
+  }
+
+  /// Recover the last working SDK if installation stopped between moving it
+  /// aside and publishing the replacement.
+  static void restoreInterruptedInstall(String bundle) {
+    if (Directory(bundle).existsSync()) return;
+    final backup = Directory('$bundle.previous');
+    if (!backup.existsSync() || !isValidBundle(backup.path)) return;
+    try {
+      backup.renameSync(bundle);
+      Log.logWarn('Restored the previous Darwin Swift SDK at $bundle');
+    } on FileSystemException catch (error) {
+      Log.logWarn(
+        'Could not restore the previous Darwin Swift SDK from '
+        '${backup.path}: $error',
+      );
+    }
   }
 
   /// A complete bundle has Swift artifact metadata and a usable iPhoneOS SDK.

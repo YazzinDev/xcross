@@ -94,6 +94,11 @@ void main() {
       expect(sdk!.bundle, bundle);
       expect(runtimeLayout.readAsStringSync(), 'layout');
 
+      await Directory(bundle).rename('$bundle.previous');
+      expect(DarwinSdk.current(bundle: bundle)?.bundle, bundle);
+      expect(Directory('$bundle.previous').existsSync(), isFalse);
+      expect(Directory(bundle).existsSync(), isTrue);
+
       await runtimeLayout.delete();
       expect(DarwinSdk.isValidBundle(bundle), isFalse);
     });

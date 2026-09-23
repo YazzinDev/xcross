@@ -252,7 +252,9 @@ Future<void> _installWindowsToolShims(
       );
     }
   }
-  await File(config.xcrun).copy(p.join(directory, 'xcrun.exe'));
+  final xcrunShim = p.join(directory, 'xcrun.exe');
+  await File(config.xcrun).copy(xcrunShim);
+  await File('$xcrunShim.sdk').writeAsString(config.iosSdk);
   await File(toolForwarderExecutable).copy(p.join(directory, 'plutil.exe'));
 
   if (config.otool case final otool?) {
