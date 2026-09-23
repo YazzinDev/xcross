@@ -49,6 +49,25 @@ String packageSrcPath(String relative) => p.join(
 );
 
 void main() {
+  test(
+    'Windows manifests import host CRT without package-specific overrides',
+    () {
+      expect(GeneratedPluginsPackage.hostManifestArguments(windows: true), [
+        '-Xmanifest',
+        '-Xfrontend',
+        '-Xmanifest',
+        '-import-module',
+        '-Xmanifest',
+        '-Xfrontend',
+        '-Xmanifest',
+        'CRT',
+      ]);
+      expect(
+        GeneratedPluginsPackage.hostManifestArguments(windows: false),
+        isEmpty,
+      );
+    },
+  );
   late Directory tmp;
 
   setUp(() async {
@@ -836,6 +855,80 @@ framework module PublicSDK {
   });
 
   group('vendorUrlPackagesAsPathDeps', () {
+    for (final sourceFallback in [true, false]) {
+      test('records fallback Swift modules only when the source lane is '
+          'active (sourceFallback: $sourceFallback)', () async {
+        addTearDown(
+          () => GeneratedPluginsPackage.sourceFallbackOverride = null,
+        );
+        GeneratedPluginsPackage.sourceFallbackOverride = sourceFallback;
+        final fallbackSwiftModules = <String, List<String>>{};
+        await GeneratedPluginsPackage.vendorUrlPackagesAsPathDeps(
+          '''
+import PackageDescription
+let package = Package(
+    name: "plugin_a",
+    dependencies: [
+        .package(url: "https://github.com/example/sdk", exact: "1.0.0"),
+    ],
+    targets: [
+        .target(
+            name: "plugin_a",
+            dependencies: [.product(name: "PublicSDK", package: "sdk")]
+        )
+    ]
+)
+''',
+          vendorDir: p.join(tmp.path, 'fallback-vendor-$sourceFallback'),
+          packageDirectory: p.join(tmp.path, 'plugin_a'),
+          fallbackSwiftModules: fallbackSwiftModules,
+          locateTool: (_) async => 'git',
+          evaluateDependencyRefs: (_) async => const {
+            'https://github.com/example/sdk': 'sha-sdk',
+          },
+          clonePackage: (_, _, _, destination) async {
+            void write(String relative, String contents) =>
+                File(p.join(destination, relative))
+                  ..createSync(recursive: true)
+                  ..writeAsStringSync(contents);
+            write('Sources/ObjC/Public/PublicSDK.h', '// public\n');
+            write(
+              'Sources/Resources/PublicSDK.modulemap',
+              'framework module PublicSDK { umbrella header "PublicSDK.h" }\n',
+            );
+            write('Sources/Swift/Implementation.swift', 'struct API {}\n');
+            write('Package.swift', '''
+import PackageDescription
+var products: [Product] = [
+    .library(name: "PublicSDK", targets: ["BinaryArtifact"]),
+]
+var targets: [Target] = [
+    .binaryTarget(name: "BinaryArtifact", url: "SDK.zip", checksum: "abc"),
+]
+if getenv("EXPERIMENTAL_SPM_BUILDS") != nil {
+    products.removeAll()
+    targets.removeAll()
+    products.append(.library(name: "SourceProduct", targets: ["SwiftImpl"]))
+    targets.append(contentsOf: [
+        .target(name: "HeaderImpl", path: "Sources/ObjC", publicHeadersPath: "Public"),
+        .target(name: "SwiftImpl", dependencies: ["HeaderImpl"], path: "Sources/Swift"),
+    ])
+}
+let package = Package(name: "sdk", products: products, targets: targets)
+''');
+          },
+        );
+
+        expect(
+          fallbackSwiftModules,
+          sourceFallback
+              ? {
+                  'PublicSDK': ['SwiftImpl'],
+                }
+              : isEmpty,
+        );
+      });
+    }
     test('rewrites url deps to path after clone callback', () async {
       final vendorDir = p.join(tmp.path, 'Vendor');
       const manifest = '''
@@ -1524,6 +1617,54 @@ let package = Package(
       expect((resolves, recoveries), (2, 1));
       expect(state.bootstrapRecovered, hasLength(1));
     });
+
+    test(
+      'repairs a fetched Swift 6.1 manifest before retrying resolve',
+      () async {
+        final root = Directory(p.join(tmp.path, 'Resolve'))
+          ..createSync(recursive: true);
+        final scratch = p.join(root.path, '.build');
+        final manifest = File(
+          p.join(
+            scratch,
+            'checkouts',
+            'sentry-cocoa',
+            'Package@swift-6.1.swift',
+          ),
+        )..createSync(recursive: true);
+        manifest.writeAsStringSync('''
+#if canImport(Darwin)
+import Darwin.C
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(MSVCRT)
+import MSVCRT
+#endif
+import PackageDescription
+let env = getenv("EXPERIMENTAL_SPM_BUILDS")
+''');
+        var attempts = 0;
+        await GeneratedPluginsPackage.evaluateDependencyRefsWithRecovery(
+          root.path,
+          resolve: (_) async {
+            attempts++;
+            if (!manifest.readAsStringSync().contains('import CRT')) {
+              throw StateError("cannot find 'getenv' in scope");
+            }
+            File(
+              p.join(root.path, 'Package.resolved'),
+            ).writeAsStringSync('{"pins":[]}');
+          },
+          recover: (_, _) =>
+              GeneratedPluginsPackage.normalizeResolvedPackageManifests(
+                scratch,
+              ),
+          attemptState: SwiftPmBinaryAttemptState(),
+        );
+        expect(attempts, 2);
+        expect(manifest.readAsStringSync(), contains('import CRT'));
+      },
+    );
 
     test('rethrows original failure when recovery has no evidence', () async {
       final original = StateError('original');
@@ -4381,6 +4522,7 @@ module FirebaseFirestore {
         ),
         [
           'package',
+          ...GeneratedPluginsPackage.hostManifestArguments(),
           '--package-path',
           'plugins',
           '--scratch-path',

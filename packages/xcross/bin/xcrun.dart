@@ -21,11 +21,22 @@ Future<void> main(List<String> arguments) async {
   }
 }
 
+/// Version reported by `xcrun --version`, matching a recent Xcode's xcrun.
+const xcrunCompatVersion = '72';
+
 Future<int> runXcrun(
   List<String> arguments, {
   DarwinSdk? sdk,
   Future<String?> Function(String name)? findOnPath,
 }) async {
+  // Build hooks (native_toolchain_c) probe `xcrun --version` before asking
+  // for SDK paths, and parse a version number out of the output. Mirror the
+  // real xcrun's format so that probe succeeds without an installed SDK.
+  if (arguments case ['--version'] || ['-version']) {
+    stdout.writeln('xcrun version $xcrunCompatVersion.');
+    return 0;
+  }
+
   sdk ??= DarwinSdk.current();
   if (sdk == null) {
     stderr.writeln(
@@ -99,7 +110,13 @@ Future<String?> _resolveTool(
   Future<String?> Function(String name)? findOnPath,
 }) async {
   final pathTool = await (findOnPath ?? _findOnPath)(name);
-  if (pathTool != null && !_isCurrentExecutable(pathTool)) return pathTool;
+  if (pathTool != null && !_isCurrentExecutable(pathTool)) {
+    // On Windows, PATH lookup can append PATHEXT's `.EXE` spelling even if
+    // the actual shim is `clang.exe`. native_toolchain_c recognizes configured
+    // compilers by a case-sensitive `endsWith('clang.exe')`, so return the
+    // lowercase extension it expects (Windows paths are case-insensitive).
+    return normalizeWindowsExecutableExtension(pathTool);
+  }
 
   switch (name) {
     case 'clang':
@@ -139,6 +156,12 @@ Future<String?> _resolveTool(
     default:
       return DarwinSdk.locateLlvmTool(Platform.isWindows ? '$name.exe' : name);
   }
+}
+
+String normalizeWindowsExecutableExtension(String path, {bool? windows}) {
+  if (!(windows ?? Platform.isWindows)) return path;
+  if (p.windows.extension(path).toLowerCase() != '.exe') return path;
+  return '${p.windows.withoutExtension(path)}.exe';
 }
 
 bool _isCurrentExecutable(String path) =>
