@@ -5,7 +5,7 @@ import 'package:path/path.dart' as p;
 /// Recursively copies [src] to [dst], preserving symbolic links.
 Future<void> copyDirectoryPreservingSymlinks(String src, String dst) async {
   await Directory(dst).create(recursive: true);
-  await for (final entity in Directory(src).list()) {
+  await for (final entity in Directory(src).list(followLinks: false)) {
     final destPath = p.join(dst, p.basename(entity.path));
     if (entity is Directory) {
       await copyDirectoryPreservingSymlinks(entity.path, destPath);
