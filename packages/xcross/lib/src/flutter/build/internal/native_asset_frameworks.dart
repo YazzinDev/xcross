@@ -4,7 +4,6 @@ import 'dart:typed_data';
 
 import 'package:cli_kit/cli_kit.dart';
 import 'package:path/path.dart' as p;
-import 'package:xcross/src/apple/mach_o.dart';
 import 'package:xcross/src/flutter/build/macho_dylib_rewriter.dart';
 import 'package:xcross/src/flutter/build/macho_linkedit_aligner.dart';
 import 'package:xcross/src/flutter/errors.dart';
@@ -82,53 +81,6 @@ List<String> collectNativeAssetFrameworks(
     frameworks[name] = selected;
   }
   return frameworks.values.toList();
-}
-
-/// Keep a native asset eager-loaded only when a SwiftPM plugin dylib imports
-/// one of its symbols. Other native assets remain embedded for Flutter's
-/// manifest-driven `dlopen` path instead of affecting Runner startup.
-Future<List<String>> nativeFrameworksRequiredByPlugins(
-  Iterable<String> frameworks,
-  Iterable<String> pluginLibraries,
-) async {
-  final imports = <String>{};
-  for (final library in pluginLibraries) {
-    imports.addAll(await _externalMachOSymbols(library, undefined: true));
-  }
-  if (imports.isEmpty) return const [];
-
-  final required = <String>[];
-  for (final framework in frameworks) {
-    final binary = p.join(framework, p.basenameWithoutExtension(framework));
-    final exports = await _externalMachOSymbols(binary, undefined: false);
-    if (exports.any(imports.contains)) required.add(framework);
-  }
-  return required;
-}
-
-Future<Set<String>> _externalMachOSymbols(
-  String path, {
-  required bool undefined,
-}) async {
-  final bytes = await File(path).readAsBytes();
-  final file = MachOFile.parse(
-    bytes,
-    invalid: (message) =>
-        throw FlutterBuildError('Invalid Mach-O $path: $message'),
-  );
-  final symbols = <String>{};
-  for (final command in file.commands) {
-    if (command.type != MachOConstants.lcSymtab) continue;
-    final table = file.parseSymbolTable(command);
-    for (var index = 0; index < table.symbolCount; index++) {
-      final symbol = table.symbolAt(index);
-      if (symbol.type & 0xe0 != 0 || symbol.type & 0x01 == 0) continue;
-      final kind = symbol.type & 0x0e;
-      if (undefined ? kind != 0 : kind != 0x0e && kind != 0x02) continue;
-      symbols.add(table.symbolName(index, symbol));
-    }
-  }
-  return symbols;
 }
 
 Future<bool> isFatMachO(String path) async {

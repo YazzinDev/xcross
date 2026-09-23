@@ -7,7 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:xcross/src/flutter/build/app_extension_builder.dart';
 import 'package:xcross/src/flutter/build/flutter_debug_bundler.dart';
 import 'package:xcross/src/flutter/build/info_plist.dart';
-import 'package:xcross/src/flutter/build/internal/native_asset_frameworks.dart';
+import 'package:xcross/src/flutter/build/internal/native_asset_linkage.dart';
 import 'package:xcross/src/flutter/build/internal/recursive_directory_copy.dart';
 import 'package:xcross/src/flutter/build/internal/runner_binary.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
