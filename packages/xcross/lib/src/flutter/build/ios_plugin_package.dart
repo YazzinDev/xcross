@@ -1661,8 +1661,8 @@ abstract final class GeneratedPluginsPackage {
   ];
 
   /// Process-local settings for SwiftPM dependency checkout: the
-  /// non-interactive Git settings every host needs, plus the Windows
-  /// symlink and sentry-cocoa source-build manifest lane.
+  /// non-interactive Git settings every host needs, plus Windows checkout
+  /// compatibility settings for symlinks and source-build manifests.
   static Map<String, String>? swiftProcessEnvironment({
     bool? windows,
     String? executable,
@@ -2508,7 +2508,7 @@ abstract final class GeneratedPluginsPackage {
       }
       final scoped = evaluateDependencyRefs;
       final bootstrap = windows
-          ? await bootstrapWindowsSentryResolve(
+          ? await bootstrapWindowsPinnedDependencyResolve(
               prestaged,
               resolvedVendorDir,
               clonePackage: clonePackage,
@@ -2634,14 +2634,14 @@ abstract final class GeneratedPluginsPackage {
     );
   }
 
-  /// SwiftPM evaluates remote manifests while computing versions. Sentry
-  /// 8.58.3's Swift 6.1 manifest calls `getenv` without importing Windows CRT,
-  /// so it fails before the checkout-normalization pass can reach it. Resolve
-  /// this exact pinned dependency through a normalized local checkout, then
-  /// restore the staged plugin manifests for the normal vendoring pass.
+  /// SwiftPM evaluates remote manifests before checkout normalization can fix
+  /// host-incompatible declarations. Prestage deterministically pinned Git
+  /// dependencies through normalized local checkouts for the resolve pass,
+  /// then restore the original plugin manifests for normal vendoring. Leave
+  /// version ranges to SwiftPM's solver rather than choosing a version here.
   @visibleForTesting
   static Future<({Map<String, String> pins, Map<String, String> originals})>
-  bootstrapWindowsSentryResolve(
+  bootstrapWindowsPinnedDependencyResolve(
     Iterable<String> packageDirectories,
     String vendorDir, {
     bool? windows,
@@ -2660,57 +2660,71 @@ abstract final class GeneratedPluginsPackage {
     final rewrites = <String, String>{};
     final pins = <String, String>{};
     final replacements = <String, String>{};
+    final manifests = <String, String>{};
+    final urls = <String, String>{};
+    final products = <String, Set<String>>{};
+    final unpinned = <String>{};
     String? git;
     for (final directory in packageDirectories) {
       final manifestFile = File(p.join(directory, 'Package.swift'));
       if (!manifestFile.existsSync()) continue;
       final original = await manifestFile.readAsString();
-      var rewritten = original;
+      manifests[manifestFile.path] = original;
       for (final dependency in parseUrlPackageDeps(original)) {
-        if (packageIdentityFromUrl(dependency.url) != 'sentry-cocoa') {
+        final identity = _canonicalGitUrl(dependency.url);
+        final ref = RegExp(
+          r'\b(?:exact|revision)\s*:\s*"([^"\r\n]+)"',
+        ).firstMatch(dependency.match)?[1];
+        if (ref == null) {
+          unpinned.add(identity);
           continue;
         }
-        final version = RegExp(
-          r'exact:\s*"([0-9]+(?:\.[0-9]+){2})"',
-        ).firstMatch(dependency.match)?[1];
-        // Do not substitute a range with an arbitrary version. SwiftPM must
-        // still solve any future non-exact constraint itself.
-        if (version == null) continue;
-        final identity = _canonicalGitUrl(dependency.url);
-        final previousVersion = pins[identity];
-        if (previousVersion != null && previousVersion != version) {
+        final previousRef = pins[identity];
+        if (previousRef != null && previousRef != ref) {
           throw FlutterBuildError(
-            'Conflicting exact Sentry versions: $previousVersion and $version',
+            'Conflicting pinned refs for $identity: $previousRef and $ref',
           );
         }
-        final destination = p.join(
-          vendorDir,
-          vendorPackageDirName(dependency.url, version),
-        );
-        if (!replacements.containsKey(identity)) {
-          git ??= await ProcessRunner.locateTool('git');
-          await (clonePackage ?? _cloneGitPackage)(
-            git,
-            dependency.url,
-            version,
-            destination,
-          );
-          await _normalizeVendoredPackageManifests(
-            destination,
-            consumedProducts: const {'Sentry'},
-          );
-          replacements[identity] = destination;
-          pins[identity] = version;
-        }
+        pins[identity] = ref;
+        urls.putIfAbsent(identity, () => dependency.url);
+        products
+            .putIfAbsent(identity, () => <String>{})
+            .addAll(_consumedProducts(original, dependency.identity));
+      }
+    }
+    // A range for the same URL must continue through SwiftPM's solver.
+    for (final identity in unpinned) {
+      pins.remove(identity);
+      urls.remove(identity);
+      products.remove(identity);
+    }
+    for (final entry in pins.entries) {
+      final identity = entry.key;
+      final ref = entry.value;
+      final url = urls[identity]!;
+      final destination = p.join(vendorDir, vendorPackageDirName(url, ref));
+      git ??= await ProcessRunner.locateTool('git');
+      await (clonePackage ?? _cloneGitPackage)(git, url, ref, destination);
+      await _normalizeVendoredPackageManifests(
+        destination,
+        consumedProducts: products[identity]!,
+      );
+      replacements[identity] = destination;
+    }
+    for (final entry in manifests.entries) {
+      var rewritten = entry.value;
+      for (final dependency in parseUrlPackageDeps(entry.value)) {
+        final identity = _canonicalGitUrl(dependency.url);
+        if (!replacements.containsKey(identity)) continue;
         rewritten = rewritten.replaceAll(
           dependency.match,
           '.package(name: "${dependency.identity}", '
           'path: "${_swiftPath(replacements[identity]!)}")',
         );
       }
-      if (rewritten != original) {
-        originals[manifestFile.path] = original;
-        rewrites[manifestFile.path] = rewritten;
+      if (rewritten != entry.value) {
+        originals[entry.key] = entry.value;
+        rewrites[entry.key] = rewritten;
       }
     }
     try {

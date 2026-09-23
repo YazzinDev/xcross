@@ -1487,29 +1487,32 @@ let package = Package(
     });
   });
 
-  group('bootstrap binary recovery', () {
-    test('uses a normalized local Sentry path only for exact pins', () async {
-      final plugin = Directory(p.join(tmp.path, 'sentry-resolve'))
+  group('bootstrap pinned dependencies', () {
+    test('normalizes and rewrites exact pinned packages', () async {
+      final plugin = Directory(p.join(tmp.path, 'pinned-resolve'))
         ..createSync();
       final manifest = File(p.join(plugin.path, 'Package.swift'))
         ..writeAsStringSync('''
 // swift-tools-version: 5.9
 import PackageDescription
 let package = Package(dependencies: [
-  .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "8.58.3")
+  .package(url: "https://example.com/vendor/cold-package", exact: "1.2.3")
+], targets: [.target(name: "Plugin", dependencies: [
+  .product(name: "ColdProduct", package: "cold-package")
+])
 ])
 ''');
       final original = manifest.readAsStringSync();
       var clones = 0;
       final result =
-          await GeneratedPluginsPackage.bootstrapWindowsSentryResolve(
+          await GeneratedPluginsPackage.bootstrapWindowsPinnedDependencyResolve(
             [plugin.path],
             p.join(tmp.path, 'vendor'),
             windows: true,
             clonePackage: (_, url, ref, destination) async {
               clones++;
-              expect(url, 'https://github.com/getsentry/sentry-cocoa');
-              expect(ref, '8.58.3');
+              expect(url, 'https://example.com/vendor/cold-package');
+              expect(ref, '1.2.3');
               await Directory(destination).create(recursive: true);
               await File(
                 p.join(destination, 'Package@swift-6.1.swift'),
@@ -1522,20 +1525,17 @@ let env = getenv("EXPERIMENTAL_SPM_BUILDS")
           );
       expect(clones, 1);
       expect(result.originals[manifest.path], original);
-      expect(
-        result.pins['https://github.com/getsentry/sentry-cocoa'],
-        '8.58.3',
-      );
+      expect(result.pins['https://example.com/vendor/cold-package'], '1.2.3');
       expect(
         manifest.readAsStringSync(),
-        contains('.package(name: "sentry-cocoa", path:'),
+        contains('.package(name: "cold-package", path:'),
       );
       expect(
         File(
           p.join(
             tmp.path,
             'vendor',
-            'sentry-cocoa@8.58.3',
+            'cold-package@1.2.3',
             'Package@swift-6.1.swift',
           ),
         ).readAsStringSync(),
@@ -1543,58 +1543,126 @@ let env = getenv("EXPERIMENTAL_SPM_BUILDS")
       );
     });
 
-    test(
-      'rejects conflicting exact Sentry versions without rewriting',
-      () async {
-        final first = Directory(p.join(tmp.path, 'sentry-first'))..createSync();
-        final second = Directory(p.join(tmp.path, 'sentry-second'))
-          ..createSync();
-        final firstManifest = File(p.join(first.path, 'Package.swift'))
-          ..writeAsStringSync(
-            '.package(url: "https://github.com/getsentry/sentry-cocoa", '
-            'exact: "8.58.3")',
-          );
-        final secondManifest = File(p.join(second.path, 'Package.swift'))
-          ..writeAsStringSync(
-            '.package(url: "https://github.com/getsentry/sentry-cocoa.git", '
-            'exact: "8.59.0")',
-          );
-        final original = firstManifest.readAsStringSync();
-        await expectLater(
-          GeneratedPluginsPackage.bootstrapWindowsSentryResolve(
-            [first.path, second.path],
+    test('handles multiple packages and Git revisions', () async {
+      final plugin = Directory(p.join(tmp.path, 'multiple-pins'))..createSync();
+      final manifest = File(p.join(plugin.path, 'Package.swift'))
+        ..writeAsStringSync('''
+.package(url: "https://example.com/vendor/first-package.git", exact: "1.2.3")
+.package(url: "https://example.com/vendor/second-package", revision: "abcdef123456")
+''');
+      final cloned = <String, String>{};
+      final result =
+          await GeneratedPluginsPackage.bootstrapWindowsPinnedDependencyResolve(
+            [plugin.path],
             p.join(tmp.path, 'vendor'),
             windows: true,
-            clonePackage: (_, _, _, destination) async {
+            clonePackage: (_, url, ref, destination) async {
+              cloned[url] = ref;
               await Directory(destination).create(recursive: true);
               await File(
                 p.join(destination, 'Package.swift'),
               ).writeAsString('import PackageDescription');
             },
-          ),
-          throwsA(isA<FlutterBuildError>()),
+          );
+      expect(cloned, {
+        'https://example.com/vendor/first-package.git': '1.2.3',
+        'https://example.com/vendor/second-package': 'abcdef123456',
+      });
+      expect(result.pins.length, 2);
+      expect(manifest.readAsStringSync(), isNot(contains('.package(url:')));
+    });
+
+    test('keeps ranges and mixed constraints for SwiftPM to solve', () async {
+      final plugin = Directory(p.join(tmp.path, 'mixed-constraints'))
+        ..createSync();
+      final manifest = File(p.join(plugin.path, 'Package.swift'))
+        ..writeAsStringSync('''
+.package(url: "https://example.com/vendor/first-package", exact: "1.2.3")
+.package(url: "https://example.com/vendor/first-package.git", from: "1.0.0")
+.package(url: "https://example.com/vendor/second-package", from: "2.0.0")
+''');
+      final original = manifest.readAsStringSync();
+      final result =
+          await GeneratedPluginsPackage.bootstrapWindowsPinnedDependencyResolve(
+            [plugin.path],
+            p.join(tmp.path, 'vendor'),
+            windows: true,
+            clonePackage: (_, _, _, _) async => fail('must not clone ranges'),
+          );
+      expect(result.pins, isEmpty);
+      expect(result.originals, isEmpty);
+      expect(manifest.readAsStringSync(), original);
+    });
+
+    test('does not bootstrap on non-Windows hosts', () async {
+      final plugin = Directory(p.join(tmp.path, 'other-host'))..createSync();
+      final manifest = File(p.join(plugin.path, 'Package.swift'))
+        ..writeAsStringSync(
+          '.package(url: "https://example.com/vendor/first-package", '
+          'exact: "1.2.3")',
         );
-        expect(firstManifest.readAsStringSync(), original);
-        expect(secondManifest.readAsStringSync(), contains('8.59.0'));
-      },
-    );
+      final original = manifest.readAsStringSync();
+      final result =
+          await GeneratedPluginsPackage.bootstrapWindowsPinnedDependencyResolve(
+            [plugin.path],
+            p.join(tmp.path, 'vendor'),
+            windows: false,
+            clonePackage: (_, _, _, _) async => fail('must not clone'),
+          );
+      expect(result.pins, isEmpty);
+      expect(result.originals, isEmpty);
+      expect(manifest.readAsStringSync(), original);
+    });
+
+    test('rejects conflicting exact refs without rewriting', () async {
+      final first = Directory(p.join(tmp.path, 'package-first'))..createSync();
+      final second = Directory(p.join(tmp.path, 'package-second'))
+        ..createSync();
+      final firstManifest = File(p.join(first.path, 'Package.swift'))
+        ..writeAsStringSync(
+          '.package(url: "https://example.com/vendor/cold-package", '
+          'exact: "1.2.3")',
+        );
+      final secondManifest = File(p.join(second.path, 'Package.swift'))
+        ..writeAsStringSync(
+          '.package(url: "https://example.com/vendor/cold-package.git", '
+          'exact: "1.3.0")',
+        );
+      final original = firstManifest.readAsStringSync();
+      await expectLater(
+        GeneratedPluginsPackage.bootstrapWindowsPinnedDependencyResolve(
+          [first.path, second.path],
+          p.join(tmp.path, 'vendor'),
+          windows: true,
+          clonePackage: (_, _, _, destination) async {
+            await Directory(destination).create(recursive: true);
+            await File(
+              p.join(destination, 'Package.swift'),
+            ).writeAsString('import PackageDescription');
+          },
+        ),
+        throwsA(isA<FlutterBuildError>()),
+      );
+      expect(firstManifest.readAsStringSync(), original);
+      expect(secondManifest.readAsStringSync(), contains('1.3.0'));
+    });
 
     test('leaves staged manifests intact when a later clone fails', () async {
-      final first = Directory(p.join(tmp.path, 'sentry-one'))..createSync();
-      final second = Directory(p.join(tmp.path, 'sentry-two'))..createSync();
+      final first = Directory(p.join(tmp.path, 'package-one'))..createSync();
+      final second = Directory(p.join(tmp.path, 'package-two'))..createSync();
       File(p.join(first.path, 'Package.swift')).writeAsStringSync(
-        '.package(url: "https://github.com/getsentry/sentry-cocoa", '
-        'exact: "8.58.3")',
+        '.package(url: "https://example.com/vendor/cold-package", '
+        'exact: "1.2.3")',
       );
       File(p.join(second.path, 'Package.swift')).writeAsStringSync(
-        '.package(url: "https://example.com/other/sentry-cocoa", '
-        'exact: "8.58.3")',
+        '.package(url: "https://example.com/other/second-package", '
+        'exact: "2.0.0")',
       );
       final firstFile = File(p.join(first.path, 'Package.swift'));
       final original = firstFile.readAsStringSync();
       var clones = 0;
       await expectLater(
-        GeneratedPluginsPackage.bootstrapWindowsSentryResolve(
+        GeneratedPluginsPackage.bootstrapWindowsPinnedDependencyResolve(
           [first.path, second.path],
           p.join(tmp.path, 'vendor'),
           windows: true,
@@ -2919,7 +2987,7 @@ API_AVAILABLE(macos(10.15), ios(17.0))
 import PackageDescription
 let package = Package(
   name: "plugin_scope",
-  dependencies: [.package(name: "DeclaredIdentity", url: "$url", exact: "1.0.0")],
+  dependencies: [.package(name: "DeclaredIdentity", url: "$url", from: "1.0.0")],
   targets: []
 )
 ''',
@@ -5362,7 +5430,7 @@ module FirebaseFirestore {
 import PackageDescription
 let package = Package(
   name: "build_scope",
-  dependencies: [.package(url: "$url", exact: "1.0.0")],
+  dependencies: [.package(url: "$url", from: "1.0.0")],
   targets: []
 )
 ''',
