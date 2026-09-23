@@ -69,12 +69,10 @@ List<String> collectNativeAssetFrameworks(
         'Native asset framework not found: $frameworkPath',
       );
     }
-    if (found.length > 1 && !p.equals(found.first, found.last)) {
-      throw FlutterBuildError(
-        'Native asset framework is ambiguous: $frameworkPath',
-      );
-    }
-    final selected = found.single;
+    // The active assemble output precedes the package-local fallback. A
+    // previous build may leave the same framework in both locations; choose
+    // one source now and carry that exact path through repair and embedding.
+    final selected = found.first;
     final name = p.basename(selected);
     final previous = frameworks[name];
     if (previous != null && !p.equals(previous, selected)) {

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:xcross/src/flutter/build/info_plist.dart';
+import 'package:xcross/src/flutter/build/internal/xcconfig_resolver.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
 import 'package:xcross/src/flutter/constants.dart';
 import 'package:xml/xml.dart';
@@ -156,6 +157,34 @@ APP[sdk=iphoneos*] = $(inherited).device
       } finally {
         await tmp.delete(recursive: true);
       }
+    });
+
+    test('reads Debug as one root and falls back to Generated', () async {
+      final tmp = await Directory.systemTemp.createTemp('xcconfig-root-');
+      addTearDown(() => tmp.delete(recursive: true));
+      final generated = File(p.join(tmp.path, 'Generated.xcconfig'))
+        ..writeAsStringSync('SUFFIX = \$(inherited)generated\n');
+      final debug = File(p.join(tmp.path, 'Debug.xcconfig'))
+        ..writeAsStringSync(
+          '#include "Generated.xcconfig"\n'
+          'SUFFIX = \$(inherited).debug\n',
+        );
+
+      expect(
+        await XcconfigResolver.readDebugConfiguration(
+          debugPath: debug.path,
+          generatedPath: generated.path,
+        ),
+        {'SUFFIX': 'generated.debug'},
+      );
+      await debug.delete();
+      expect(
+        await XcconfigResolver.readDebugConfiguration(
+          debugPath: debug.path,
+          generatedPath: generated.path,
+        ),
+        {'SUFFIX': 'generated'},
+      );
     });
   });
 

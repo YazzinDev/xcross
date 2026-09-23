@@ -8,10 +8,13 @@ import 'package:test/test.dart';
 import 'package:xcross/src/cli/basic/sdk_install.dart';
 import 'package:xcross/src/flutter/build/flutter_pack_operation.dart';
 import 'package:xcross/src/flutter/build/flutter_packer.dart';
+import 'package:xcross/src/flutter/build/info_plist.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_gate_evidence.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
 import 'package:xcross/src/flutter/constants.dart';
 import 'package:xcross/src/flutter/errors.dart';
+import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
+import 'package:xml/xml.dart';
 
 /// Resolves a path under `lib/src/flutter/` without depending on the working
 /// directory the suite happens to be launched from.
@@ -33,6 +36,45 @@ Future<void> _deleteTemp(Directory directory) async {
 }
 
 void main() {
+  test('Debug includes and CLI versions reach the final plist values', () async {
+    final project = await Directory.systemTemp.createTemp('xcross-plist-');
+    addTearDown(() => project.delete(recursive: true));
+    File(
+      p.join(project.path, 'pubspec.yaml'),
+    ).writeAsStringSync('name: example\n');
+    final flutter = Directory(p.join(project.path, 'ios', 'Flutter'))
+      ..createSync(recursive: true);
+    File(p.join(flutter.path, 'Generated.xcconfig')).writeAsStringSync(
+      'APP_SUFFIX = \$(inherited)generated\n'
+      'MARKETING_VERSION = generated-version\n',
+    );
+    File(p.join(flutter.path, 'Debug.xcconfig')).writeAsStringSync(
+      '#include "Generated.xcconfig"\n'
+      'APP_SUFFIX[sdk=iphoneos*] = \$(inherited).device\n'
+      'CURRENT_PROJECT_VERSION = 2\n',
+    );
+    final packer = FlutterPacker(
+      projectRoot: project.path,
+      bundleId: 'com.example.app',
+      options: const FlutterBuildOptions(buildName: '5.0', buildNumber: '50'),
+    );
+    final xml = InfoPlist.expandVars(
+      '<plist><dict>'
+      r'<key>Name</key><string>$(APP_SUFFIX)</string>'
+      r'<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>'
+      r'<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>'
+      '</dict></plist>',
+      await packer.buildSubstitutionMap(),
+    );
+    final values = XmlDocument.parse(xml).rootElement
+        .getElement('dict')!
+        .childElements
+        .where((entry) => entry.name.local == 'string')
+        .map((entry) => entry.innerText)
+        .toList();
+    expect(values, ['generated.device', '5.0', '50']);
+  });
+
   test(
     'resolves explicit and configured Flutter roots before environment roots',
     () async {

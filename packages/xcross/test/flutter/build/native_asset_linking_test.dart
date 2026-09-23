@@ -56,7 +56,7 @@ void main() {
     expect(arguments, isNot(contains('Second')));
   });
 
-  test('rejects missing and ambiguous manifest frameworks', () {
+  test('rejects missing manifest frameworks and prefers current outputs', () {
     final root = Directory.systemTemp.createTempSync('xcross-asset-conflict-');
     addTearDown(() => root.deleteSync(recursive: true));
     final output = p.join(root.path, 'assemble');
@@ -75,19 +75,27 @@ void main() {
       ),
       throwsA(isA<FlutterBuildError>()),
     );
-    Directory(
-      p.join(output, 'native_assets', 'Shared.framework'),
-    ).createSync(recursive: true);
-    Directory(
-      p.join(root.path, 'build', 'native_assets', 'ios', 'Shared.framework'),
-    ).createSync(recursive: true);
+    final current = p.join(output, 'native_assets', 'Shared.framework');
+    final stale = p.join(
+      root.path,
+      'build',
+      'native_assets',
+      'ios',
+      'Shared.framework',
+    );
+    Directory(current).createSync(recursive: true);
+    Directory(stale).createSync(recursive: true);
+    File(p.join(current, 'Shared')).writeAsStringSync('current');
+    File(p.join(stale, 'Shared')).writeAsStringSync('stale');
+    final selected = collectNativeAssetFrameworks(
+      manifest,
+      output,
+      projectRoot: root.path,
+    );
+    expect(selected, [current]);
     expect(
-      () => collectNativeAssetFrameworks(
-        manifest,
-        output,
-        projectRoot: root.path,
-      ),
-      throwsA(isA<FlutterBuildError>()),
+      File(p.join(selected.single, 'Shared')).readAsStringSync(),
+      'current',
     );
   });
 }

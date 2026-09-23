@@ -10,6 +10,7 @@ import 'package:xcross/src/flutter/build/info_plist.dart';
 import 'package:xcross/src/flutter/build/internal/recursive_directory_copy.dart';
 import 'package:xcross/src/flutter/build/internal/runner_binary.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
+import 'package:xcross/src/flutter/build/internal/xcconfig_resolver.dart';
 import 'package:xcross/src/flutter/build/ios_app_extensions.dart';
 import 'package:xcross/src/flutter/build/ios_bundle_resources.dart';
 import 'package:xcross/src/flutter/build/ios_bundle_versions.dart';
@@ -548,7 +549,7 @@ final class FlutterPacker {
     // keys see already-substituted values from the template, and before
     // storyboard stripping so $(VAR)-valued storyboard names are resolved
     // before the .storyboardc filesystem probe.
-    plistXml = InfoPlist.expandVars(plistXml, await _buildSubstitutionMap());
+    plistXml = InfoPlist.expandVars(plistXml, await buildSubstitutionMap());
     plistXml = InfoPlist.applyIosRequiredKeys(
       plistXml,
       bundleId: bundleId,
@@ -584,10 +585,11 @@ final class FlutterPacker {
   ///
   /// Precedence (lowest → highest):
   ///   1. Hard-coded defaults (`1.0.0` / `1`).
-  ///   2. `Generated.xcconfig` values from `flutter build` tooling.
-  ///   3. `Debug.xcconfig` application build settings.
+  ///   2. `Debug.xcconfig` and its includes in textual order, falling back
+  ///      to `Generated.xcconfig` only when no Debug file exists.
   ///   4. Explicit `--build-name` / `--build-number` CLI flags.
-  Future<Map<String, String>> _buildSubstitutionMap() async {
+  @visibleForTesting
+  Future<Map<String, String>> buildSubstitutionMap() async {
     final subs = <String, String>{
       'EXECUTABLE_NAME': PlistDefaults.executable,
       'PRODUCT_NAME': PlistDefaults.executable,
@@ -615,10 +617,10 @@ final class FlutterPacker {
 
     final flutterConfigDirectory = p.join(projectRoot, 'ios', 'Flutter');
     subs.addAll(
-      await InfoPlist.readXcconfigFiles([
-        p.join(flutterConfigDirectory, 'Generated.xcconfig'),
-        p.join(flutterConfigDirectory, 'Debug.xcconfig'),
-      ]),
+      await XcconfigResolver.readDebugConfiguration(
+        debugPath: p.join(flutterConfigDirectory, 'Debug.xcconfig'),
+        generatedPath: p.join(flutterConfigDirectory, 'Generated.xcconfig'),
+      ),
     );
 
     if (options.buildName != null) {
