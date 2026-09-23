@@ -88,8 +88,8 @@ final class IosPlugin {
     return null;
   }
 
-  /// An explicit iOS availability annotation immediately preceding the Swift
-  /// plugin class, when one is present. The generated registrant uses it for
+  /// An explicit iOS availability annotation attached to the plugin class,
+  /// when one is present. The generated registrant uses it for
   /// a runtime guard; absent metadata must not be guessed from the package's
   /// minimum deployment target, which can be lower than the class's API.
   String? get pluginClassIosAvailability {
@@ -106,23 +106,56 @@ final class IosPlugin {
       r'^(?:@[A-Za-z_]\w*(?:\([^)]*\))?\s*)+$',
       dotAll: true,
     );
-    final availability = RegExp(
-      r'@available\s*\(\s*iOS(?:\s+(\d+(?:\.\d+){0,2})\s*[,)]|'
-      r'\s*,\s*introduced\s*:\s*(\d+(?:\.\d+){0,2}))',
+    final availability = RegExp(r'@available\s*\(([^)]*)\)', dotAll: true);
+    final shortIos = RegExp(r'(?:^|,)\s*iOS\s+(\d+(?:\.\d+){0,2})(?=\s*,|$)');
+    final introducedIos = RegExp(
+      r'(?:^|,)\s*iOS\s*,\s*introduced\s*:\s*(\d+(?:\.\d+){0,2})',
+    );
+    final objcDeclaration = RegExp(
+      '@interface\\s+${RegExp.escape(pluginClass)}\\b',
+    );
+    final objcAvailability = RegExp(
+      r'API_AVAILABLE\s*\([^;{}]*?\bios\s*\(\s*(\d+(?:\.\d+){0,2})\s*\)',
       dotAll: true,
     );
     String? requiredVersion;
+    void consider(String version) {
+      if (requiredVersion == null ||
+          _compareIosVersions(version, requiredVersion!) > 0) {
+        requiredVersion = version;
+      }
+    }
+
     for (final file
         in sources
             .listSync(recursive: true, followLinks: false)
             .whereType<File>()
-            .where((file) => p.extension(file.path) == '.swift')) {
-      // Ignore declarations and attributes in comments. Replacing rather than
-      // deleting preserves line boundaries for the adjacency check below.
-      final source = file.readAsStringSync().replaceAllMapped(
-        RegExp(r'/\*[\s\S]*?\*/|//[^\r\n]*'),
-        (match) => match[0]!.replaceAll(RegExp(r'[^\r\n]'), ' '),
-      );
+            .where(
+              (file) => {'.swift', '.h'}.contains(p.extension(file.path)),
+            )) {
+      // Preserve line boundaries while masking comments and string literals;
+      // examples embedded in Swift multiline strings are not declarations.
+      final source = _codeOutsideCommentsAndStrings(file.readAsStringSync());
+      if (p.extension(file.path) == '.h') {
+        var pendingAvailability = '';
+        for (final rawLine in source.split(RegExp(r'\r?\n'))) {
+          final line = rawLine.trim();
+          if (line.isEmpty) continue;
+          if (objcDeclaration.hasMatch(line)) {
+            for (final annotation in objcAvailability.allMatches(
+              '$pendingAvailability $line',
+            )) {
+              consider(annotation[1]!);
+            }
+            pendingAvailability = '';
+          } else if (line.startsWith('API_AVAILABLE')) {
+            pendingAvailability = '$pendingAvailability $line';
+          } else {
+            pendingAvailability = '';
+          }
+        }
+        continue;
+      }
       var pendingAttributes = '';
       for (final rawLine in source.split(RegExp(r'\r?\n'))) {
         final line = rawLine.trim();
@@ -135,11 +168,11 @@ final class IosPlugin {
           if (pendingAttributes.isEmpty ||
               attributes.hasMatch(pendingAttributes)) {
             for (final annotation in availability.allMatches(attached)) {
-              final version = annotation[1] ?? annotation[2]!;
-              if (requiredVersion == null ||
-                  _compareIosVersions(version, requiredVersion) > 0) {
-                requiredVersion = version;
-              }
+              final body = annotation[1]!;
+              final version =
+                  shortIos.firstMatch(body)?[1] ??
+                  introducedIos.firstMatch(body)?[1];
+              if (version != null) consider(version);
             }
           }
           pendingAttributes = '';
@@ -162,6 +195,74 @@ final class IosPlugin {
       }
     }
     return requiredVersion;
+  }
+
+  static String _codeOutsideCommentsAndStrings(String source) {
+    final result = StringBuffer();
+    var index = 0;
+    var blockDepth = 0;
+    var lineComment = false;
+    var stringDelimiter = 0; // 0: code, 1: quoted, 3: multiline quoted
+    var escaped = false;
+
+    void mask(int count) {
+      for (var offset = 0; offset < count; offset++) {
+        final character = source[index + offset];
+        result.write(character == '\n' || character == '\r' ? character : ' ');
+      }
+      index += count;
+    }
+
+    while (index < source.length) {
+      final character = source[index];
+      if (lineComment) {
+        if (character == '\n') lineComment = false;
+        mask(1);
+      } else if (blockDepth > 0) {
+        if (source.startsWith('/*', index)) {
+          blockDepth++;
+          mask(2);
+        } else if (source.startsWith('*/', index)) {
+          blockDepth--;
+          mask(2);
+        } else {
+          mask(1);
+        }
+      } else if (stringDelimiter > 0) {
+        if (!escaped &&
+            stringDelimiter == 3 &&
+            source.startsWith('"""', index)) {
+          stringDelimiter = 0;
+          mask(3);
+        } else if (!escaped && stringDelimiter == 1 && character == '"') {
+          stringDelimiter = 0;
+          mask(1);
+        } else {
+          if (character == r'\' && !escaped) {
+            escaped = true;
+          } else {
+            escaped = false;
+          }
+          mask(1);
+        }
+      } else if (source.startsWith('//', index)) {
+        lineComment = true;
+        mask(2);
+      } else if (source.startsWith('/*', index)) {
+        blockDepth = 1;
+        mask(2);
+      } else if (source.startsWith('"""', index)) {
+        stringDelimiter = 3;
+        mask(3);
+      } else if (character == '"') {
+        stringDelimiter = 1;
+        mask(1);
+      } else {
+        result.write(character);
+        index++;
+      }
+    }
+    return result.toString();
   }
 
   static int _compareIosVersions(String left, String right) {

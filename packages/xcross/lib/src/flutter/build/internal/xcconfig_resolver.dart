@@ -179,6 +179,14 @@ final class _XcconfigComments {
         index++;
         continue;
       }
+      // A trailing line comment starts after whitespace. Keep unquoted URL
+      // values such as https://example.invalid intact.
+      if (!quoted &&
+          character == '/' &&
+          next == '/' &&
+          (index == 0 || line[index - 1].trim().isEmpty)) {
+        break;
+      }
       result.write(character);
       if (character == '"' && !escaped) quoted = !quoted;
       escaped = character == r'\' && !escaped;

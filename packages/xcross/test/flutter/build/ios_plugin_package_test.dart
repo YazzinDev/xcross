@@ -2677,6 +2677,53 @@ public class NewPlugin: NSObject, FlutterPlugin {}
       );
     });
 
+    test('recognizes iOS availability after another Swift platform', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final source = File(
+        p.join(plugin.swiftPackageDir, 'Sources', 'NewPlugin.swift'),
+      )..createSync(recursive: true);
+      source.writeAsStringSync('''
+@available(macOS 10.15, iOS 17.0, *)
+public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+
+      expect(plugin.pluginClassIosAvailability, '17.0');
+    });
+
+    test('ignores fake Swift classes inside multiline strings', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final source = File(
+        p.join(plugin.swiftPackageDir, 'Sources', 'NewPlugin.swift'),
+      )..createSync(recursive: true);
+      source.writeAsStringSync('''
+let example = """
+@available(iOS 17.0, *)
+class NewPlugin
+"""
+public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+
+      expect(plugin.pluginClassIosAvailability, isNull);
+    });
+
+    test('recognizes Objective-C API_AVAILABLE on a plugin interface', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final source = File(
+        p.join(plugin.swiftPackageDir, 'Sources', 'NewPlugin.h'),
+      )..createSync(recursive: true);
+      source.writeAsStringSync('''
+API_AVAILABLE(macos(10.15), ios(17.0))
+@interface NewPlugin : NSObject <FlutterPlugin>
+@end
+''');
+
+      expect(plugin.pluginClassIosAvailability, '17.0');
+      expect(
+        GeneratedPluginsPackage.registrantSource([plugin]),
+        contains('if #available(iOS 17.0, *)'),
+      );
+    });
+
     test('verbose source tracks each plugin and prints a summary', () {
       final source = GeneratedPluginsPackage.registrantSource([
         makePlugin('plugin_a', pluginClass: 'PluginA'),

@@ -88,6 +88,20 @@ QUOTED = "literal /* not a comment */"
       }
     });
 
+    test('removes trailing line comments without truncating URLs', () {
+      final settings = InfoPlist.parseXcconfig('''
+FLUTTER_BUILD_NAME = 1.2.3 // development version
+APP_ID = com.example.app // device bundle
+URL = https://example.invalid/path
+QUOTED = "literal // value"
+''');
+
+      expect(settings['FLUTTER_BUILD_NAME'], '1.2.3');
+      expect(settings['APP_ID'], 'com.example.app');
+      expect(settings['URL'], 'https://example.invalid/path');
+      expect(settings['QUOTED'], '"literal // value"');
+    });
+
     test(
       'evaluates SDK and architecture qualifiers before assigning values',
       () {
