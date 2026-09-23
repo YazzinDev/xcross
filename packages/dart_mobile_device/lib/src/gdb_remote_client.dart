@@ -53,6 +53,23 @@ final class GdbReplyPacket {
     return fields;
   }
 
+  /// Debugger stop reason, including GDB's standalone watchpoint/breakpoint
+  /// fields that do not require a `reason:` field.
+  String? get stopReason {
+    final fields = stopFields;
+    if (fields['reason'] case final String reason) return reason;
+    for (final name in const [
+      'watch',
+      'rwatch',
+      'awatch',
+      'swbreak',
+      'hwbreak',
+    ]) {
+      if (fields.containsKey(name)) return name;
+    }
+    return null;
+  }
+
   /// A repeated stop at the same execution point must not be resumed forever.
   String get stopIdentity {
     final fields = stopFields;
@@ -81,7 +98,7 @@ final class GdbReplyPacket {
   /// A bare first SIGTRAP may be an attach hand-off; a named stop is not.
   bool get isFatalStop => switch (stopSignal) {
     null => type == GdbReply.stopped,
-    5 => stopFields.containsKey('metype') || stopFields.containsKey('reason'),
+    5 => stopFields.containsKey('metype') || stopReason != null,
     _ => true,
   };
 

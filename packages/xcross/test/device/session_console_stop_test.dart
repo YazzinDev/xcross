@@ -98,7 +98,16 @@ void main() {
   });
 
   test('does not continue named or unknown SIGTRAP stops', () async {
-    for (final reason in ['breakpoint', 'watchpoint', 'unknown']) {
+    for (final detail in [
+      'reason:breakpoint;',
+      'reason:watchpoint;',
+      'reason:unknown;',
+      'watch:100;',
+      'rwatch:100;',
+      'awatch:100;',
+      'swbreak:;',
+      'hwbreak:;',
+    ]) {
       final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       final accepted = server.first;
       final gdb = GdbRemoteClient(host: '127.0.0.1', port: server.port);
@@ -112,7 +121,7 @@ void main() {
         listenForKeyboard: false,
       );
       final run = console.run();
-      socket.add(_frame('T05thread:1;reason:$reason;').codeUnits);
+      socket.add(_frame('T05thread:1;$detail').codeUnits);
       await socket.flush();
       await run.timeout(const Duration(seconds: 2));
       expect(console.isStopped, isTrue);

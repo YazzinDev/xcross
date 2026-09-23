@@ -321,13 +321,20 @@ void _stopSignalTests() {
       expect(packet.stopFields['metype'], '6');
     });
 
-    test('reports named breakpoint, watchpoint and unknown stops', () {
-      for (final reason in ['breakpoint', 'watchpoint', 'unknown']) {
-        final packet = GdbReplyPacket(
-          GdbReply.stopped,
-          'T05thread:1;reason:$reason;',
-        );
+    test('reports named debugger stops with and without reason fields', () {
+      for (final detail in [
+        'reason:breakpoint;',
+        'reason:watchpoint;',
+        'reason:unknown;',
+        'watch:100;',
+        'rwatch:100;',
+        'awatch:100;',
+        'swbreak:;',
+        'hwbreak:;',
+      ]) {
+        final packet = GdbReplyPacket(GdbReply.stopped, 'T05thread:1;$detail');
         expect(packet.isFatalStop, isTrue);
+        expect(packet.stopReason, isNotNull);
       }
     });
 

@@ -221,7 +221,7 @@ final class SessionConsole {
   /// looks identical. The device log carries the actual reason, so it is
   /// printed with the stop instead of being discarded.
   void _reportStop(GdbReplyPacket reply) {
-    final reason = reply.stopFields['reason'];
+    final reason = reply.stopReason;
     final debuggerStop =
         reply.stopSignal == 5 &&
         reason != null &&
