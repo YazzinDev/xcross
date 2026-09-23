@@ -393,10 +393,22 @@ abstract final class CoreDeviceLauncher {
         appArguments: appArgs,
       );
     } catch (e) {
-      throw XcrossError('Launch failed: $e');
+      Log.logTrace('launch failure details: $e');
+      throw XcrossError(launchFailureMessage(e));
     }
     Log.logTrace('launched suspended pid=$pid');
     return pid;
+  }
+
+  /// Explain the iOS foreground requirement without dumping pymobiledevice3's
+  /// Python traceback into the normal CLI output.
+  static String launchFailureMessage(Object error) {
+    final details = error.toString();
+    if (details.contains('Background launch requested')) {
+      return 'Launch failed: iOS rejected a background launch. Unlock the '
+          'iPhone, keep its screen awake, and run again.';
+    }
+    return 'Launch failed: $details';
   }
 
   /// Spin up hot reload if [hotReload] config is provided.
