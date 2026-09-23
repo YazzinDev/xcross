@@ -1899,7 +1899,7 @@ abstract final class GeneratedPluginsPackage {
       final target = owner.substring(0, owner.length - '.build'.length);
       // A generated aggregate may reach an internal Swift target through a
       // product even though that target is not itself a public product.
-      // Windows must include internal header targets such as SentrySwift,
+      // Windows must include reachable internal Swift header targets,
       // including when older plans carry no dependency map. Preserve the
       // public-product candidate filter on POSIX hosts for every plan.
       if (!(windows ?? Platform.isWindows) && !candidates.contains(target)) {

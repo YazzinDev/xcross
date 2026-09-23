@@ -4324,16 +4324,11 @@ let package = Package(
         final headers = [
           p.join(
             buildDir,
-            'FirebaseFirestore.build',
+            'PluginStore.build',
             'include',
-            'FirebaseFirestore-Swift.h',
+            'PluginStore-Swift.h',
           ),
-          p.join(
-            buildDir,
-            'FirebaseAuth.build',
-            'include',
-            'FirebaseAuth-Swift.h',
-          ),
+          p.join(buildDir, 'PluginAuth.build', 'include', 'PluginAuth-Swift.h'),
           p.join(buildDir, 'Unrelated.build', 'include', 'Unrelated-Swift.h'),
         ];
         Directory(buildDir).createSync(recursive: true);
@@ -4351,7 +4346,7 @@ let package = Package(
         expect(
           GeneratedPluginsPackage.missingSwiftInteropTargets(
             buildDir,
-            candidates: const {'FirebaseFirestore', 'FirebaseAuth'},
+            candidates: const {'PluginStore', 'PluginAuth'},
           ),
           isEmpty,
           reason: 'no module map has been written yet',
@@ -4359,9 +4354,9 @@ let package = Package(
         expect(
           GeneratedPluginsPackage.plannedSwiftInteropTargets(
             buildDir,
-            candidates: const {'FirebaseFirestore', 'FirebaseAuth'},
+            candidates: const {'PluginStore', 'PluginAuth'},
           ),
-          ['FirebaseAuth', 'FirebaseFirestore', 'Unrelated'],
+          ['PluginAuth', 'PluginStore', 'Unrelated'],
         );
 
         File(headers[1]).parent.createSync(recursive: true);
@@ -4369,9 +4364,9 @@ let package = Package(
         expect(
           GeneratedPluginsPackage.plannedSwiftInteropTargets(
             buildDir,
-            candidates: const {'FirebaseFirestore', 'FirebaseAuth'},
+            candidates: const {'PluginStore', 'PluginAuth'},
           ),
-          ['FirebaseFirestore', 'Unrelated'],
+          ['PluginStore', 'Unrelated'],
           reason: 'a header already on disk needs no prebuild',
         );
       },
@@ -4385,7 +4380,7 @@ let package = Package(
       expect(
         GeneratedPluginsPackage.plannedSwiftInteropTargets(
           buildDir,
-          candidates: const {'FirebaseFirestore'},
+          candidates: const {'PluginStore'},
         ),
         isEmpty,
       );
@@ -4437,36 +4432,36 @@ let package = Package(
       final buildDir = p.join(tmp.path, 'internal-interop');
       final header = p.join(
         buildDir,
-        'SentrySwift.build',
+        'InternalSwiftTarget.build',
         'include',
-        'SentrySwift-Swift.h',
+        'InternalSwiftTarget-Swift.h',
       );
       Directory(buildDir).createSync(recursive: true);
       File(p.join(buildDir, 'description.json')).writeAsStringSync(
         jsonEncode({
           'swiftCommands': {
-            'SentrySwift': {
+            'InternalSwiftTarget': {
               'otherArguments': ['-emit-objc-header-path', header],
             },
           },
           'targetDependencyMap': {
-            'FlutterPluginsGenerated': ['sentry_flutter'],
-            'sentry_flutter': ['SentrySwift'],
-            'SentrySwift': <String>[],
+            'FlutterPluginsGenerated': ['example_plugin'],
+            'example_plugin': ['InternalSwiftTarget'],
+            'InternalSwiftTarget': <String>[],
           },
         }),
       );
       expect(
         GeneratedPluginsPackage.plannedSwiftInteropTargets(
           buildDir,
-          candidates: const {'sentry_flutter'},
+          candidates: const {'example_plugin'},
         ),
-        ['SentrySwift'],
+        ['InternalSwiftTarget'],
       );
       expect(
         GeneratedPluginsPackage.plannedSwiftInteropTargets(
           buildDir,
-          candidates: const {'sentry_flutter'},
+          candidates: const {'example_plugin'},
           windows: false,
         ),
         isEmpty,
@@ -4509,15 +4504,15 @@ let package = Package(
       final buildDir = p.join(tmp.path, 'legacy-no-map');
       final header = p.join(
         buildDir,
-        'SentrySwift.build',
+        'InternalSwiftTarget.build',
         'include',
-        'SentrySwift-Swift.h',
+        'InternalSwiftTarget-Swift.h',
       );
       Directory(buildDir).createSync(recursive: true);
       File(p.join(buildDir, 'description.json')).writeAsStringSync(
         jsonEncode({
           'swiftCommands': {
-            'SentrySwift': {
+            'InternalSwiftTarget': {
               'otherArguments': ['-emit-objc-header-path', header],
             },
           },
@@ -4527,14 +4522,14 @@ let package = Package(
       expect(
         GeneratedPluginsPackage.plannedSwiftInteropTargets(
           buildDir,
-          candidates: const {'sentry_flutter'},
+          candidates: const {'example_plugin'},
         ),
-        ['SentrySwift'],
+        ['InternalSwiftTarget'],
       );
       expect(
         GeneratedPluginsPackage.plannedSwiftInteropTargets(
           buildDir,
-          candidates: const {'sentry_flutter'},
+          candidates: const {'example_plugin'},
           windows: false,
         ),
         isEmpty,
@@ -4542,9 +4537,9 @@ let package = Package(
       );
       expect(
         GeneratedPluginsPackage.orderedWindowsSwiftInteropTargets(buildDir, [
-          'SentrySwift',
+          'InternalSwiftTarget',
         ]),
-        ['SentrySwift'],
+        ['InternalSwiftTarget'],
       );
     });
 
@@ -4639,8 +4634,8 @@ let package = Package(
         for (final target in [
           'Aux',
           'FlutterPluginsGenerated',
-          'SentrySwift',
-          'sentry_flutter',
+          'InternalSwiftTarget',
+          'example_plugin',
         ])
           target: p.join(
             buildDir,
@@ -4659,9 +4654,9 @@ let package = Package(
               },
           },
           'targetDependencyMap': {
-            'FlutterPluginsGenerated': ['sentry_flutter', 'Aux'],
-            'sentry_flutter': ['SentrySwift'],
-            'SentrySwift': <String>[],
+            'FlutterPluginsGenerated': ['example_plugin', 'Aux'],
+            'example_plugin': ['InternalSwiftTarget'],
+            'InternalSwiftTarget': <String>[],
             'Aux': <String>[],
           },
         }),
@@ -4673,15 +4668,15 @@ let package = Package(
       expect(planned, [
         'Aux',
         'FlutterPluginsGenerated',
-        'SentrySwift',
-        'sentry_flutter',
+        'InternalSwiftTarget',
+        'example_plugin',
       ]);
       expect(
         GeneratedPluginsPackage.orderedWindowsSwiftInteropTargets(
           buildDir,
           planned,
         ),
-        ['Aux', 'SentrySwift', 'sentry_flutter'],
+        ['Aux', 'InternalSwiftTarget', 'example_plugin'],
       );
       final events = <String>[];
       await GeneratedPluginsPackage.buildWithInteropRecovery(
@@ -4696,14 +4691,14 @@ let package = Package(
           await header.writeAsString('generated');
         },
         build: () async {
-          expect(File(headers['SentrySwift']!).existsSync(), isTrue);
+          expect(File(headers['InternalSwiftTarget']!).existsSync(), isTrue);
           events.add('build');
         },
       );
       expect(events, [
         'target:Aux',
-        'target:SentrySwift',
-        'target:sentry_flutter',
+        'target:InternalSwiftTarget',
+        'target:example_plugin',
         'build',
       ]);
     });
@@ -4767,7 +4762,7 @@ let package = Package(
       'planned missing targets preserve aggregate-first recovery ordering',
       () async {
         final buildDir = p.join(tmp.path, 'arm64-apple-ios', 'debug');
-        for (final target in ['FirebaseFirestore', 'FirebaseAuth']) {
+        for (final target in ['PluginStore', 'PluginAuth']) {
           final include = Directory(
             p.join(buildDir, '$target.build', 'include'),
           );
@@ -4780,13 +4775,13 @@ let package = Package(
         final events = <String>[];
         await GeneratedPluginsPackage.buildWithInteropRecovery(
           targetBuildDir: buildDir,
-          interopTargetCandidates: const {'FirebaseFirestore', 'FirebaseAuth'},
+          interopTargetCandidates: const {'PluginStore', 'PluginAuth'},
           skipInitialRecovery: true,
           windows: true,
           build: () async {
             events.add('build${++attempts}');
             if (attempts == 1) {
-              throw StateError("'FirebaseAuth-Swift.h' file not found");
+              throw StateError("'PluginAuth-Swift.h' file not found");
             }
           },
           buildTarget: (target) async {
@@ -4800,8 +4795,8 @@ let package = Package(
         expect(events, [
           'repair',
           'build1',
-          'FirebaseAuth',
-          'FirebaseFirestore',
+          'PluginAuth',
+          'PluginStore',
           'repair',
           'build2',
         ]);
