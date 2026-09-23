@@ -503,6 +503,19 @@ void main() {
       expect(xcrun.exitCode, 0);
       expect(xcrun.stdout.toString().trim(), '--show-sdk-path');
 
+      final version = await Process.run(
+        'xcrun',
+        const ['--version'],
+        environment: {'PATH': tmp.path},
+        includeParentEnvironment: false,
+      );
+      expect(version.exitCode, 0);
+      expect(version.stdout.toString(), contains('xcrun version'));
+      expect(
+        File(p.join(tmp.path, 'ar')).readAsStringSync(),
+        contains('/toolchain/llvm-ar'),
+      );
+
       final hostCc = await Process.run(
         'cc',
         const ['-m64', '-Wl,--as-needed', 'host.c'],

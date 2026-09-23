@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:cli_kit/cli_kit.dart';
 import 'package:darwin_sdk_kit/darwin_sdk_kit.dart';
 import 'package:path/path.dart' as p;
-import 'package:xcross/src/version.dart';
 import 'package:xcross/xcross.dart';
 
 Future<void> main(List<String> arguments) async {
@@ -27,6 +26,9 @@ Future<void> main(List<String> arguments) async {
   }
 }
 
+/// Version reported by `xcrun --version`, matching a recent Xcode's xcrun.
+const xcrunCompatVersion = '72';
+
 String? _readShimSdk(String executable) {
   final sidecar = File('$executable.sdk');
   if (!sidecar.existsSync()) return null;
@@ -39,13 +41,8 @@ String? _readShimSdk(String executable) {
 String? xcrunShimResponse(List<String> arguments, {String? executable}) {
   // A version probe identifies xcrun itself only when no tool was selected.
   // It must also work before an SDK sidecar has been installed.
-  if (arguments.length == 1 && arguments.single == '--version') {
-    const current = XcrossVersion.current;
-    final version =
-        RegExp(r'^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$').hasMatch(current)
-        ? current
-        : '0.0.0';
-    return 'xcross xcrun $version';
+  if (arguments case ['--version'] || ['-version']) {
+    return 'xcrun version $xcrunCompatVersion.';
   }
   final xcrunExecutable = executable ?? Platform.resolvedExecutable;
   final shimSdk = _readShimSdk(xcrunExecutable);
@@ -88,6 +85,14 @@ Future<int> runXcrun(
   Future<String?> Function(String name)? findOnPath,
   Future<int> Function(String tool, List<String> arguments)? runTool,
 }) async {
+  // Build hooks (native_toolchain_c) probe `xcrun --version` before asking
+  // for SDK paths, and parse a version number out of the output. Mirror the
+  // real xcrun's format so that probe succeeds without an installed SDK.
+  if (arguments case ['--version'] || ['-version']) {
+    stdout.writeln('xcrun version $xcrunCompatVersion.');
+    return 0;
+  }
+
   sdk ??= DarwinSdk.current();
   if (sdk == null) {
     stderr.writeln(
@@ -217,7 +222,13 @@ Future<String?> _resolveTool(
   Future<String?> Function(String name)? findOnPath,
 }) async {
   final pathTool = await (findOnPath ?? _findOnPath)(name);
-  if (pathTool != null && !_isCurrentExecutable(pathTool)) return pathTool;
+  if (pathTool != null && !_isCurrentExecutable(pathTool)) {
+    // On Windows, PATH lookup can append PATHEXT's `.EXE` spelling even if
+    // the actual shim is `clang.exe`. native_toolchain_c recognizes configured
+    // compilers by a case-sensitive `endsWith('clang.exe')`, so return the
+    // lowercase extension it expects (Windows paths are case-insensitive).
+    return normalizeWindowsExecutableExtension(pathTool);
+  }
 
   switch (name) {
     case 'clang':
@@ -257,6 +268,12 @@ Future<String?> _resolveTool(
     default:
       return DarwinSdk.locateLlvmTool(Platform.isWindows ? '$name.exe' : name);
   }
+}
+
+String normalizeWindowsExecutableExtension(String path, {bool? windows}) {
+  if (!(windows ?? Platform.isWindows)) return path;
+  if (p.windows.extension(path).toLowerCase() != '.exe') return path;
+  return '${p.windows.withoutExtension(path)}.exe';
 }
 
 bool _isCurrentExecutable(String path) =>

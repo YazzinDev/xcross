@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:darwin_sdk_kit/darwin_sdk_kit.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
-import 'package:xcross/src/version.dart';
 
 import '../../bin/xcrun.dart' as xcrun;
 
@@ -41,11 +40,43 @@ void main() {
     final executable = p.join(directory.path, 'xcrun.exe');
     expect(
       xcrun.xcrunShimResponse(const ['--version'], executable: executable),
-      startsWith('xcross xcrun '),
+      'xcrun version ${xcrun.xcrunCompatVersion}.',
+    );
+    expect(
+      xcrun.xcrunShimResponse(const ['-version'], executable: executable),
+      'xcrun version ${xcrun.xcrunCompatVersion}.',
     );
   });
   test('rejects an invocation without a tool', () async {
     expect(await xcrun.runXcrun(const []), 1);
+  });
+
+  test('answers the --version probe without an SDK', () async {
+    expect(await xcrun.runXcrun(const ['--version']), 0);
+  });
+
+  test('normalizes PATHEXT uppercase .EXE for native_toolchain_c', () {
+    expect(
+      xcrun.normalizeWindowsExecutableExtension(
+        r'C:\Temp\xcross-tools\clang.EXE',
+        windows: true,
+      ),
+      r'C:\Temp\xcross-tools\clang.exe',
+    );
+    expect(
+      xcrun.normalizeWindowsExecutableExtension(
+        r'C:\Temp\xcross-tools\ar.EXE',
+        windows: true,
+      ),
+      r'C:\Temp\xcross-tools\ar.exe',
+    );
+    expect(
+      xcrun.normalizeWindowsExecutableExtension(
+        '/tools/clang.EXE',
+        windows: false,
+      ),
+      '/tools/clang.EXE',
+    );
   });
 
   test('returns the exact streamed child exit code', () async {
@@ -110,7 +141,7 @@ void main() {
         xcrun.xcrunShimResponse(const [
           '--version',
         ], executable: executable.path),
-        'xcross xcrun ${RegExp(r'^\d+\.\d+\.\d+').hasMatch(XcrossVersion.current) ? XcrossVersion.current : '0.0.0'}',
+        'xcrun version ${xcrun.xcrunCompatVersion}.',
       );
       expect(
         xcrun.xcrunShimResponse(const [

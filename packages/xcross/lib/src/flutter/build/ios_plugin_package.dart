@@ -664,6 +664,7 @@ abstract final class GeneratedPluginsPackage {
   static Future<void> _resolveOnce(String swift, String directory) async {
     final result = await ProcessRunner.run(swift, [
       if (!Platform.isWindows) 'package',
+      ...hostManifestArguments(),
       '--package-path',
       directory,
       'resolve',
@@ -1660,6 +1661,15 @@ abstract final class GeneratedPluginsPackage {
     if (windows) (key: 'core.symlinks', value: 'false'),
   ];
 
+  /// Whether vendored packages build their `EXPERIMENTAL_SPM_BUILDS`
+  /// source-fallback lane, which [swiftProcessEnvironment] enables only on
+  /// Windows. Tests may force either lane.
+  @visibleForTesting
+  static bool? sourceFallbackOverride;
+
+  static bool get _sourceFallbackActive =>
+      sourceFallbackOverride ?? Platform.isWindows;
+
   /// Process-local settings for SwiftPM dependency checkout: the
   /// non-interactive Git settings every host needs, plus Windows checkout
   /// compatibility settings for symlinks and source-build manifests.
@@ -1706,6 +1716,7 @@ abstract final class GeneratedPluginsPackage {
     required String toolsetPath,
   }) => [
     'package',
+    ...hostManifestArguments(),
     '--package-path',
     pluginsDir,
     '--scratch-path',
@@ -1718,6 +1729,25 @@ abstract final class GeneratedPluginsPackage {
     toolsetPath,
     'resolve',
   ];
+
+  /// Supply the Windows C runtime to host manifests, including remote manifests
+  /// SwiftPM evaluates before creating a checkout. Swift 6 replaced MSVCRT with
+  /// CRT, so old conditional imports otherwise leave C APIs such as getenv
+  /// unavailable. These flags affect host manifests, never iOS target sources.
+  @visibleForTesting
+  static List<String> hostManifestArguments({bool? windows}) =>
+      (windows ?? Platform.isWindows)
+      ? const [
+          '-Xmanifest',
+          '-Xfrontend',
+          '-Xmanifest',
+          '-import-module',
+          '-Xmanifest',
+          '-Xfrontend',
+          '-Xmanifest',
+          'CRT',
+        ]
+      : const [];
 
   /// Compiles and caches the Swift compiler plugin stub that answers
   /// `#Preview` macro-expansion requests with empty source, so builds
@@ -2165,6 +2195,7 @@ abstract final class GeneratedPluginsPackage {
     '--scratch-path',
     scratchPath,
     if (windows ?? Platform.isWindows) ...[
+      ...hostManifestArguments(windows: true),
       '--disable-automatic-resolution',
       // Windows Swift's interface verifier does not inherit SwiftPM's search
       // path for generated sibling Clang modules during Darwin cross builds.
@@ -4771,8 +4802,15 @@ let package = Package(
           recover ??
           (_, state) async {
             if (!canRecover) return false;
+            // The unified Resolve root fetches URL dependencies before they
+            // are vendored. A malformed host manifest can fail the first
+            // resolve before binary artifacts are considered. Repair
+            // those fetched checkouts and retry with the existing recovery.
+            final normalized = await normalizeResolvedPackageManifests(
+              resolverScratchPath!,
+            );
             final recoveredArchive = await recoverBootstrapBinaryArtifacts(
-              scratchPath: resolverScratchPath!,
+              scratchPath: resolverScratchPath,
               binaryArtifactStore: binaryArtifactStore!,
               provenance: scannedProvenance!,
               attemptState: state,
@@ -4787,7 +4825,7 @@ let package = Package(
               attemptState: state,
               windows: true,
             );
-            return recoveredArchive || recoveredExtraction;
+            return normalized || recoveredArchive || recoveredExtraction;
           },
       attemptState: attemptState ?? SwiftPmBinaryAttemptState(),
     );
@@ -6038,7 +6076,14 @@ let package = Package(
         normalizeHostManifest(original),
         packageDir: packageDir,
         consumedProducts: consumedProducts,
-        fallbackSwiftModules: fallbackSwiftModules,
+        // The source-fallback block only activates where
+        // [swiftProcessEnvironment] sets EXPERIMENTAL_SPM_BUILDS (Windows).
+        // Elsewhere the binary product is used, its Swift half is not a
+        // separate module, and injecting `import <fallback>` into consumers
+        // fails with "no such module" (e.g. `SentrySwift` in sentry_flutter).
+        fallbackSwiftModules: _sourceFallbackActive
+            ? fallbackSwiftModules
+            : null,
       );
       await update(manifest, original, normalized);
     }
