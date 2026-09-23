@@ -69,6 +69,7 @@ final class SdkInstallCommand extends Command<void> {
     );
 
     final destDir = DarwinSdk.nativeInstallDir();
+    await prepareExistingSdk(destDir);
     final parent = Directory(p.dirname(destDir));
     await parent.create(recursive: true);
     final staged = await parent.createTemp('${p.basename(destDir)}.staging-');
@@ -131,6 +132,24 @@ final class SdkInstallCommand extends Command<void> {
     }
   }
 
+  /// Recover an interrupted swap and clear a leftover backup only when the
+  /// published SDK is known to be usable.
+  static Future<void> prepareExistingSdk(String destDir) async {
+    DarwinSdk.restoreInterruptedInstall(destDir);
+    final backup = Directory('$destDir.previous');
+    if (!backup.existsSync()) return;
+    if (!DarwinSdk.isValidBundle(destDir)) {
+      throw XcrossError(
+        'The installed Darwin Swift SDK is incomplete. The previous SDK is '
+        'preserved at ${backup.path}; restore it before installing again.',
+      );
+    }
+    await Log.logStep(
+      'Removing previous SDK backup',
+      () => Directory(SdkInstall.ioPath(backup.path)).delete(recursive: true),
+    );
+  }
+
   /// Swap a validated sibling into place, restoring the old SDK if the new
   /// directory cannot be published.
   static Future<void> activateStagedSdk(
@@ -145,7 +164,7 @@ final class SdkInstallCommand extends Command<void> {
       );
     }
     final previous = Directory(SdkInstall.ioPath(destDir));
-    final backup = Directory('${staged.path}.previous');
+    final backup = Directory('$destDir.previous');
     if (backup.existsSync()) {
       throw StateError('SDK backup path already exists: ${backup.path}');
     }
@@ -162,7 +181,7 @@ final class SdkInstallCommand extends Command<void> {
     }
     if (hadPrevious) {
       try {
-        await backup.delete(recursive: true);
+        await Directory(SdkInstall.ioPath(backup.path)).delete(recursive: true);
       } on Object catch (error) {
         Log.logWarn('Could not remove old SDK at ${backup.path}: $error');
       }
