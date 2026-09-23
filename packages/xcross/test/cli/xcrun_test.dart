@@ -49,7 +49,13 @@ void main() {
   });
 
   test('returns the exact streamed child exit code', () async {
-    final child = await Process.start('sh', const ['-c', 'exit 37']);
+    final directory = Directory.systemTemp.createTempSync('xcross-xcrun-exit-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final script = File(p.join(directory.path, 'exit.dart'))
+      ..writeAsStringSync("import 'dart:io'; void main() => exit(37);");
+    final child = await Process.start(Platform.resolvedExecutable, [
+      script.path,
+    ]);
     expect(
       await xcrun.runResolvedTool(
         '/ignored',
