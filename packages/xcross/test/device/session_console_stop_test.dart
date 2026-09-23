@@ -3,9 +3,33 @@ import 'dart:io';
 
 import 'package:dart_mobile_device/dart_mobile_device.dart';
 import 'package:test/test.dart';
+import 'package:xcross/src/device/core_device_launcher.dart';
 import 'package:xcross/src/device/session_console.dart';
 
 void main() {
+  test('failed initial resume stops and awaits the console', () async {
+    final gdb = GdbRemoteClient(host: '127.0.0.1', port: 1);
+    addTearDown(gdb.close);
+    final console = SessionConsole(
+      gdb: gdb,
+      hotReload: null,
+      listenForKeyboard: false,
+    );
+    final running = console.run();
+
+    await expectLater(
+      CoreDeviceLauncher.resumeInitialDebugger(
+        console: console,
+        consoleFuture: running,
+        resume: () async => throw StateError('resume failed'),
+      ),
+      throwsStateError,
+    );
+    expect(console.isStopped, isTrue);
+    await running.timeout(const Duration(seconds: 2));
+    console.stop();
+  });
+
   test('continues after a nonfatal debugserver stop', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(server.close);
@@ -109,6 +133,39 @@ void main() {
       expect(RegExp(r'\$c#63').allMatches(received.toString()), hasLength(1));
     },
   );
+
+  test('does not resume a second bare SIGTRAP at another PC', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    final accepted = server.first;
+    final gdb = GdbRemoteClient(host: '127.0.0.1', port: server.port);
+    await gdb.connect();
+    addTearDown(gdb.close);
+    final socket = await accepted;
+    addTearDown(socket.destroy);
+    final received = StringBuffer();
+    final firstContinue = Completer<void>();
+    socket.listen((bytes) {
+      received.write(String.fromCharCodes(bytes));
+      if (!firstContinue.isCompleted &&
+          received.toString().contains(r'$c#63')) {
+        firstContinue.complete();
+      }
+    });
+    final console = SessionConsole(
+      gdb: gdb,
+      hotReload: null,
+      listenForKeyboard: false,
+    );
+    final running = console.run();
+    socket.add(_frame('T05thread:1;pc:100;').codeUnits);
+    await socket.flush();
+    await firstContinue.future.timeout(const Duration(seconds: 2));
+    socket.add(_frame('T05thread:1;pc:200;').codeUnits);
+    await socket.flush();
+    await running.timeout(const Duration(seconds: 2));
+    expect(RegExp(r'\$c#63').allMatches(received.toString()), hasLength(1));
+  });
 }
 
 String _frame(String payload) {

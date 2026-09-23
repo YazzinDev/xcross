@@ -37,6 +37,16 @@ String? _readShimSdk(String executable) {
 /// Answers the `xcrun` probes that Flutter native-asset hooks run from a
 /// sanitized environment.
 String? xcrunShimResponse(List<String> arguments, {String? executable}) {
+  // A version probe identifies xcrun itself only when no tool was selected.
+  // It must also work before an SDK sidecar has been installed.
+  if (arguments.length == 1 && arguments.single == '--version') {
+    const current = XcrossVersion.current;
+    final version =
+        RegExp(r'^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$').hasMatch(current)
+        ? current
+        : '0.0.0';
+    return 'xcross xcrun $version';
+  }
   final xcrunExecutable = executable ?? Platform.resolvedExecutable;
   final shimSdk = _readShimSdk(xcrunExecutable);
   if (shimSdk == null) return null;
@@ -46,17 +56,6 @@ String? xcrunShimResponse(List<String> arguments, {String? executable}) {
   if (arguments.contains('--show-sdk-path')) return shimSdk;
   if (arguments.contains('--show-sdk-platform-path')) {
     return _sdkPlatformPath(shimSdk);
-  }
-  // native_toolchain_c probes xcrun's version before it asks for the SDK.
-  if (arguments.contains('--version')) {
-    // Source builds are labelled "unreleased", but the hook's tool resolver
-    // requires a numeric version even for a development executable.
-    const current = XcrossVersion.current;
-    final version =
-        RegExp(r'^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$').hasMatch(current)
-        ? current
-        : '0.0.0';
-    return 'xcross xcrun $version';
   }
   return findShimTool(arguments, executable: xcrunExecutable);
 }

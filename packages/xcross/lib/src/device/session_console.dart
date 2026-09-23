@@ -79,6 +79,10 @@ final class SessionConsole {
 
   Future<void> get stopped => _stoppedCompleter.future;
 
+  /// End the session when launch or setup fails before the normal run loop
+  /// finishes. Safe to call again from cleanup.
+  void stop() => _stop();
+
   void configureHotReload({
     required HotReloadController? controller,
     required String? unavailable,
@@ -169,6 +173,7 @@ final class SessionConsole {
             // indistinguishable from a hang. Report it and end the session.
             final repeated = _resumedStops[reply.stopIdentity] ?? 0;
             if (reply.isFatalStop ||
+                (reply.stopSignal == 5 && _resumedStops.isNotEmpty) ||
                 repeated > 0 ||
                 _resumedStops.length >= _maxAutomaticResumes ||
                 _resumePending) {

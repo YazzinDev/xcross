@@ -4874,6 +4874,29 @@ module FirebaseFirestore {
       );
     });
 
+    test('prepends bundled xcrun to the configured child PATH', () async {
+      final directory = await Directory.systemTemp.createTemp('xcross-path-');
+      addTearDown(() async {
+        ProcessRunner.resetConfiguration();
+        await directory.delete(recursive: true);
+      });
+      final executable = p.join(directory.path, 'xcross.exe');
+      File(p.join(directory.path, 'xcrun.exe')).writeAsStringSync('shim');
+      ProcessRunner.configure(
+        normalizedTools: const {},
+        effectiveChildEnvironment: const {'PATH': r'C:\configured\tools'},
+      );
+
+      final environment = GeneratedPluginsPackage.swiftProcessEnvironment(
+        windows: true,
+        executable: executable,
+      )!;
+      expect(
+        environment['PATH'],
+        '${directory.path};${r'C:\configured\tools'}',
+      );
+    });
+
     test('disables every configured git credential helper', () {
       // A system-wide helper (Git Credential Manager on the Windows
       // runners) is consulted before GIT_TERMINAL_PROMPT applies and can

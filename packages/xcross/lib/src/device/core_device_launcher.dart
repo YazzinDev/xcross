@@ -148,23 +148,27 @@ abstract final class CoreDeviceLauncher {
       // Hot-reload setup is inside the same cleanup boundary as the session. A
       // failed VM connection must not leak the attached debugger or leave a DAP
       // launch paused forever.
+      final console = SessionConsole(
+        gdb: gdb,
+        hotReload: null,
+        hotReloadUnavailable: hotReload == null
+            ? null
+            : 'hot reload is still preparing; wait for "Hot reload ready".',
+        onRestartRequested: onRestartRequested,
+        crashReason: () => deviceLog?.crashReason,
+        recentDeviceLines: () => deviceLog?.tailLines ?? const [],
+      );
+      final consoleFuture = console.run();
       try {
-        final console = SessionConsole(
-          gdb: gdb,
-          hotReload: null,
-          hotReloadUnavailable: hotReload == null
-              ? null
-              : 'hot reload is still preparing; wait for "Hot reload ready".',
-          onRestartRequested: onRestartRequested,
-          crashReason: () => deviceLog?.crashReason,
-          recentDeviceLines: () => deviceLog?.tailLines ?? const [],
-        );
-        final consoleFuture = console.run();
         // Attach leaves the app paused. Install the reply listener before
         // resuming it: debugproxy may send its first nonfatal stop packet
         // immediately after `c`, and a broadcast stream would otherwise lose
         // that packet and leave the Debug engine paused forever.
-        await gdb.resume();
+        await resumeInitialDebugger(
+          console: console,
+          consoleFuture: consoleFuture,
+          resume: gdb.resume,
+        );
         Log.logDone('Debugger attached');
         if (hotReload != null) Log.logInfo('Preparing hot reload…');
         final setupFuture = _trySpinUpHotReload(
@@ -205,6 +209,8 @@ abstract final class CoreDeviceLauncher {
         }
         await consoleFuture;
       } finally {
+        console.stop();
+        await _cleanupStep('console', () => consoleFuture);
         // Every step is timed out: a single hung flush/close on Windows left
         // `q` in a silent stuck state (no further input or output).
         await _cleanupStep('vm-service', () => vmService?.close());
@@ -214,6 +220,27 @@ abstract final class CoreDeviceLauncher {
       }
     } finally {
       await deviceLog?.close();
+    }
+  }
+
+  /// Do not leave the console's GDB subscription and SIGINT listener alive
+  /// when the first resume fails before the ordinary session await.
+  @visibleForTesting
+  static Future<void> resumeInitialDebugger({
+    required SessionConsole console,
+    required Future<void> consoleFuture,
+    required Future<void> Function() resume,
+  }) async {
+    try {
+      await resume();
+    } on Object catch (error, stack) {
+      console.stop();
+      try {
+        await consoleFuture;
+      } on Object {
+        // A cleanup failure must not hide the original resume failure.
+      }
+      Error.throwWithStackTrace(error, stack);
     }
   }
 

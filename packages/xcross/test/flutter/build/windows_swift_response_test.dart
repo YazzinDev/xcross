@@ -6,6 +6,48 @@ import 'package:test/test.dart';
 import 'package:xcross/src/flutter/build/ios_plugin_package.dart';
 
 void main() {
+  test(
+    'interop search paths remain visible after response-file repair',
+    () async {
+      final scratch = await Directory.systemTemp.createTemp(
+        'xcross-interop-rsp-',
+      );
+      addTearDown(() => scratch.delete(recursive: true));
+      final include = p.join(
+        scratch.path,
+        'arm64-apple-ios',
+        'debug',
+        'A.build',
+      );
+      final interop = ['-Xcc', '-I', '-Xcc', include];
+      final arguments = ['swiftc.exe', ...interop, '-D', 'A' * 29000];
+      File(
+        p.join(scratch.path, 'debug.yaml'),
+      ).writeAsStringSync('    args: ${jsonEncode(arguments)}\n');
+      expect(
+        GeneratedPluginsPackage.manifestCarriesInteropSearchPaths(
+          scratch.path,
+          interop,
+        ),
+        isTrue,
+      );
+      expect(
+        await GeneratedPluginsPackage.repairWindowsSwiftResponseFiles(
+          scratch.path,
+          windows: true,
+        ),
+        isTrue,
+      );
+      expect(
+        GeneratedPluginsPackage.manifestCarriesInteropSearchPaths(
+          scratch.path,
+          interop,
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('counts escaped UTF-16 command line units including executable', () {
     final arguments = [
       r'C:\very long tool directory\clang.exe',

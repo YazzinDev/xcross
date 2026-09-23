@@ -35,6 +35,15 @@ void main() {
       isNull,
     );
   });
+  test('answers its own version without an SDK sidecar', () {
+    final directory = Directory.systemTemp.createTempSync('xcross-xcrun-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final executable = p.join(directory.path, 'xcrun.exe');
+    expect(
+      xcrun.xcrunShimResponse(const ['--version'], executable: executable),
+      startsWith('xcross xcrun '),
+    );
+  });
   test('rejects an invocation without a tool', () async {
     expect(await xcrun.runXcrun(const []), 1);
   });
@@ -96,6 +105,16 @@ void main() {
           '--version',
         ], executable: executable.path),
         'xcross xcrun ${RegExp(r'^\d+\.\d+\.\d+').hasMatch(XcrossVersion.current) ? XcrossVersion.current : '0.0.0'}',
+      );
+      expect(
+        xcrun.xcrunShimResponse(const [
+          '--sdk',
+          'iphoneos',
+          'clang',
+          '--version',
+        ], executable: executable.path),
+        isNull,
+        reason: 'clang --version must reach the selected compiler',
       );
       expect(
         xcrun.xcrunShimResponse(const [

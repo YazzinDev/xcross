@@ -1969,7 +1969,7 @@ abstract final class GeneratedPluginsPackage {
       if (onWindows && bundledXcrun.existsSync())
         'PATH': _prependPathEntry(
           bundledTools,
-          (environment ?? Platform.environment)['PATH'],
+          (environment ?? ProcessRunner.effectiveEnvironment)['PATH'],
           windows: onWindows,
         ),
     };
@@ -2292,6 +2292,33 @@ abstract final class GeneratedPluginsPackage {
       return false;
     }
     if (text.isEmpty) return false;
+    final responseDirectory = p.join(scratchPath, '.xcross-response');
+    final responseArguments = <String>{};
+    for (final line in text.split('\n')) {
+      const prefix = '    args: ';
+      if (!line.startsWith('$prefix[')) continue;
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(line.substring(prefix.length));
+      } on FormatException {
+        continue;
+      }
+      if (decoded is! List) continue;
+      for (final argument in decoded.whereType<String>()) {
+        if (!argument.startsWith('@')) continue;
+        final path = p.normalize(p.absolute(argument.substring(1)));
+        if (!p.isWithin(p.absolute(responseDirectory), path) ||
+            FileSystemEntity.isLinkSync(path) ||
+            !RegExp(r'^[a-f0-9]{64}\.rsp$').hasMatch(p.basename(path))) {
+          continue;
+        }
+        try {
+          responseArguments.addAll(File(path).readAsLinesSync());
+        } on FileSystemException {
+          return false;
+        }
+      }
+    }
     var checked = 0;
     // [plannedSwiftInteropSearchPaths] emits each include as the quadruple
     // `-Xcc -I -Xcc <path>`, so the path follows the `-I` across the `-Xcc`
@@ -2300,7 +2327,12 @@ abstract final class GeneratedPluginsPackage {
       if (interopArguments[index] != '-I') continue;
       if (interopArguments[index + 1] != '-Xcc') continue;
       checked++;
-      if (!text.contains(jsonEncode(interopArguments[index + 2]))) return false;
+      final path = interopArguments[index + 2];
+      if (!text.contains(jsonEncode(path)) &&
+          !responseArguments.contains(_quoteWindowsArgument(path)) &&
+          !responseArguments.contains(_quoteGnuArgument(path))) {
+        return false;
+      }
     }
     return checked > 0;
   }
