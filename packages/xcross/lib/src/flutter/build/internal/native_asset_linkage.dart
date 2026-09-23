@@ -11,6 +11,7 @@ const _forceFlatNamespace = 0x100;
 const _dynamicLookupOrdinal = 0xfe;
 const _executableOrdinal = 0xff;
 const _privateExternal = 0x10;
+const _weakReference = 0x40;
 const _external = 0x01;
 const _symbolType = 0x0e;
 const _stab = 0xe0;
@@ -69,12 +70,13 @@ Future<Set<String>> _unboundImports(String path) async {
           (symbol.type & _symbolType) != _undefined) {
         continue;
       }
-      final ordinal =
-          file.data.getUint16(
-            table.symbolOffset + index * 16 + 6,
-            Endian.little,
-          ) >>
-          8;
+      final description = file.data.getUint16(
+        table.symbolOffset + index * 16 + 6,
+        Endian.little,
+      );
+      // A weak import must not make its provider a required Runner dependency.
+      if ((description & _weakReference) != 0) continue;
+      final ordinal = description >> 8;
       if (twoLevel &&
           ordinal != _dynamicLookupOrdinal &&
           ordinal != _executableOrdinal) {

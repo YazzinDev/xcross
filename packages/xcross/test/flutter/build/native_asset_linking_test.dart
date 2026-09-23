@@ -89,6 +89,31 @@ void main() {
     ]);
   });
 
+  test('does not eagerly link frameworks for weak plugin imports', () async {
+    final root = Directory.systemTemp.createTempSync('xcross-weak-import-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final framework = p.join(root.path, 'optional.framework');
+    Directory(framework).createSync();
+    _writeMachO(p.join(framework, 'optional'), '_optional', undefined: false);
+    final plugin = p.join(root.path, 'plugin.dylib');
+    _writeMachO(
+      plugin,
+      '_optional',
+      undefined: true,
+      ordinal: 0xfe,
+      weakReference: true,
+    );
+    expect(
+      await nativeFrameworksRequiredByPlugins([framework], [plugin]),
+      isEmpty,
+    );
+    _writeMachO(plugin, '_optional', undefined: true, ordinal: 0xfe);
+    expect(
+      await nativeFrameworksRequiredByPlugins([framework], [plugin]),
+      [framework],
+    );
+  });
+
   test(
     'uses public export trie aliases but not private nlist symbols',
     () async {
@@ -248,6 +273,7 @@ void _writeMachO(
   String symbol, {
   required bool undefined,
   int? ordinal,
+  bool weakReference = false,
   int? symbolType,
   String? trieExport,
   bool separateTrieCommand = false,
@@ -301,7 +327,11 @@ void _writeMachO(
   bytes[symbolOffset + 4] = symbolType ?? (undefined ? 0x01 : 0x0f);
   bytes[symbolOffset + 5] = undefined ? 0 : 1;
   if (ordinal != null) {
-    data.setUint16(symbolOffset + 6, ordinal << 8, Endian.little);
+    data.setUint16(
+      symbolOffset + 6,
+      (ordinal << 8) | (weakReference ? 0x40 : 0),
+      Endian.little,
+    );
   }
   bytes.setRange(stringsOffset, stringsOffset + strings.length, strings);
   if (trieExport != null) {
