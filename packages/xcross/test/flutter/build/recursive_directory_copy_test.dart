@@ -17,11 +17,13 @@ void main() {
     await Link(
       p.join(source, 'Source'),
     ).create(p.join('Versions', 'Current', 'Source'));
+    await Link(p.join(source, 'Alias')).create('Source');
 
     await copyDirectoryPreservingSymlinks(source, destination);
 
     final current = p.join(destination, 'Versions', 'Current');
     final binary = p.join(destination, 'Source');
+    final alias = p.join(destination, 'Alias');
     expect(
       FileSystemEntity.typeSync(current, followLinks: false),
       FileSystemEntityType.link,
@@ -35,6 +37,16 @@ void main() {
       await Link(binary).target(),
       p.join('Versions', 'Current', 'Source'),
     );
+    expect(
+      FileSystemEntity.typeSync(alias, followLinks: false),
+      FileSystemEntityType.link,
+    );
+    expect(await Link(alias).target(), 'Source');
     expect(await File(binary).readAsString(), 'binary');
+    expect(await File(alias).readAsString(), 'binary');
+
+    await copyDirectoryPreservingSymlinks(source, destination);
+    expect(await Link(current).target(), 'A');
+    expect(await File(alias).readAsString(), 'binary');
   });
 }
