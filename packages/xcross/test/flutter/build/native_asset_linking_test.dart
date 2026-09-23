@@ -51,9 +51,20 @@ void main() {
       subframeworks: '/subframeworks',
       sdkVersion: '26.0',
       deploymentTarget: const IosDeploymentTarget('17.0'),
+      nativeAssetFrameworks: frameworks,
     );
-    expect(arguments, isNot(contains('First')));
-    expect(arguments, isNot(contains('Second')));
+    for (final framework in frameworks) {
+      expect(
+        arguments,
+        containsAllInOrder([
+          '-F',
+          p.dirname(framework),
+          '-needed_framework',
+          p.basenameWithoutExtension(framework),
+        ]),
+      );
+    }
+    expect(arguments, isNot(contains('Stale')));
   });
 
   test('rejects missing manifest frameworks and prefers current outputs', () {

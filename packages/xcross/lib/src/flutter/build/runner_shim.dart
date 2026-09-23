@@ -35,6 +35,7 @@ final class RunnerShim {
     required String outputDir,
     required IosDeploymentTarget deploymentTarget,
     String? pluginsLibrary,
+    List<String> nativeAssetFrameworks = const [],
     bool verbose = false,
   }) => Log.logStep('Compiling Runner', () async {
     final clang = await DarwinSdk.resolveDarwinClang(sdk);
@@ -76,6 +77,7 @@ final class RunnerShim {
       sdkVersion: sdkVersion,
       deploymentTarget: deploymentTarget,
       pluginsLibrary: pluginsLibrary,
+      nativeAssetFrameworks: nativeAssetFrameworks,
     );
 
     if (!File(outputPath).existsSync()) {
@@ -161,6 +163,7 @@ final class RunnerShim {
     required String sdkVersion,
     required IosDeploymentTarget deploymentTarget,
     String? pluginsLibrary,
+    List<String> nativeAssetFrameworks = const [],
   }) async {
     Log.logTrace('[ld64.lld] link Runner.o → Runner');
     // An SDK whose text stubs still declare an architecture this linker
@@ -180,6 +183,7 @@ final class RunnerShim {
           sdkVersion: sdkVersion,
           deploymentTarget: deploymentTarget,
           pluginsLibrary: pluginsLibrary,
+          nativeAssetFrameworks: nativeAssetFrameworks,
         ),
         inheritStdio: Log.isVerbose,
         label: 'ld64.lld',
@@ -197,6 +201,7 @@ final class RunnerShim {
     required String sdkVersion,
     required IosDeploymentTarget deploymentTarget,
     String? pluginsLibrary,
+    List<String> nativeAssetFrameworks = const [],
   }) => [
     '-arch',
     'arm64',
@@ -218,6 +223,12 @@ final class RunnerShim {
     subframeworks,
     '-framework',
     'Flutter',
+    for (final framework in nativeAssetFrameworks) ...[
+      '-F',
+      p.dirname(framework),
+      '-needed_framework',
+      p.basenameWithoutExtension(framework),
+    ],
     '-framework',
     'UIKit',
     '-framework',
