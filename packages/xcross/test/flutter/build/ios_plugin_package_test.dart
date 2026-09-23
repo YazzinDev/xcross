@@ -2370,6 +2370,44 @@ let env = getenv("EXPERIMENTAL_SPM_BUILDS")
         isFalse,
       );
 
+      // A dangling Git link can acquire a directory target after checkout.
+      // On Windows, its original file-typed reparse point must be replaced.
+      Directory(p.join(repo, 'Sources', 'not-present')).createSync();
+      expect(
+        await GeneratedPluginsPackage.materializeCheckoutSymlinks(
+          scratch,
+          symlinks: true,
+        ),
+        isTrue,
+      );
+      expect(Directory(danglingLink.path).existsSync(), isTrue);
+
+      if (Platform.isWindows) {
+        // `mklink` without /D deliberately creates a file-typed link to a
+        // directory. A matching target string alone is not enough to reuse it.
+        Link(dirLink.path).deleteSync();
+        final wrongKind = Process.runSync('cmd', [
+          '/c',
+          'mklink',
+          dirLink.path,
+          r'..\Sources\nested',
+        ]);
+        expect(
+          wrongKind.exitCode,
+          0,
+          reason: '${wrongKind.stdout}${wrongKind.stderr}',
+        );
+        expect(Directory(dirLink.path).existsSync(), isFalse);
+        expect(
+          await GeneratedPluginsPackage.materializeCheckoutSymlinks(
+            scratch,
+            symlinks: true,
+          ),
+          isTrue,
+        );
+        expect(Directory(dirLink.path).existsSync(), isTrue);
+      }
+
       // A placeholder brought back by a `reset --hard` under
       // `core.symlinks=false` is detected and restored.
       Link(fileLink.path).deleteSync();
