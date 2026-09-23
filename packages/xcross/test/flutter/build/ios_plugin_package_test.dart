@@ -2562,6 +2562,45 @@ let package = Package(targets: [
   });
 
   group('registrantSource', () {
+    void writeBinaryPlist(
+      String frameworkPath, {
+      bool simulator = false,
+      bool binary = false,
+    }) {
+      final libraries = <String>[
+        '''
+<dict><key>LibraryIdentifier</key><string>ios-arm64</string>
+<key>SupportedPlatform</key><string>ios</string>
+<key>SupportedArchitectures</key><array><string>arm64</string></array></dict>
+''',
+        if (simulator)
+          '''
+<dict><key>LibraryIdentifier</key><string>ios-arm64-simulator</string>
+<key>SupportedPlatform</key><string>ios</string>
+<key>SupportedPlatformVariant</key><string>simulator</string>
+<key>SupportedArchitectures</key><array><string>arm64</string></array></dict>
+''',
+      ];
+      final xml =
+          '<?xml version="1.0" encoding="UTF-8"?>\n'
+          '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+          '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+          '<plist version="1.0"><dict><key>AvailableLibraries</key>\n'
+          '<array>${libraries.join()}</array></dict></plist>';
+      final file = File(p.join(frameworkPath, 'Info.plist'))
+        ..createSync(recursive: true);
+      if (binary) {
+        final data = PropertyListSerialization.dataWithPropertyList(
+          PropertyListSerialization.propertyListWithString(xml),
+        );
+        file.writeAsBytesSync(
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        );
+      } else {
+        file.writeAsStringSync(xml);
+      }
+    }
+
     test('imports and registers only the plugin with a pluginClass', () {
       final pluginA = makePlugin('plugin_a', pluginClass: 'PluginA');
       final pluginB = makePlugin('plugin_b');
@@ -2612,6 +2651,114 @@ public class NewPlugin: NSObject, FlutterPlugin {
         plugin,
       ], verbose: true);
       expect(verbose, contains('requires iOS 17.0'));
+    });
+
+    test('guards a binary-only plugin using its Swift interface', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final frameworkPath = p.join(
+        plugin.swiftPackageDir,
+        'NewPlugin.xcframework',
+      );
+      writeBinaryPlist(frameworkPath, simulator: true);
+      final interface = File(
+        p.join(
+          frameworkPath,
+          'ios-arm64',
+          'NewPlugin.framework',
+          'Modules',
+          'NewPlugin.swiftmodule',
+          'arm64-apple-ios.swiftinterface',
+        ),
+      )..createSync(recursive: true);
+      interface.writeAsStringSync('''
+@available(iOS 17.0, *)
+public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+      final simulatorInterface = File(
+        interface.path.replaceFirst('ios-arm64', 'ios-arm64-simulator'),
+      )..createSync(recursive: true);
+      simulatorInterface.writeAsStringSync('''
+@available(iOS 18.0, *)
+public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+
+      expect(plugin.pluginClassIosAvailability, '17.0');
+      expect(
+        GeneratedPluginsPackage.registrantSource([plugin]),
+        contains('if #available(iOS 17.0, *)'),
+      );
+    });
+
+    test('finds downloaded binary interfaces in the staged package', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final staged = p.join(tmp.path, 'staged-new-plugin');
+      final frameworkPath = p.join(staged, 'NewPlugin.xcframework');
+      writeBinaryPlist(frameworkPath, binary: true);
+      final interface = File(
+        p.join(
+          frameworkPath,
+          'ios-arm64',
+          'NewPlugin.framework',
+          'Modules',
+          'NewPlugin.swiftmodule',
+          'arm64-apple-ios.swiftinterface',
+        ),
+      )..createSync(recursive: true);
+      interface.writeAsStringSync('''
+@available(iOS 17.0, *) public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+
+      expect(plugin.pluginClassIosAvailability, isNull);
+      expect(
+        GeneratedPluginsPackage.registrantSource(
+          [plugin],
+          stagedPackageDirs: {'new_plugin': staged},
+        ),
+        contains('if #available(iOS 17.0, *)'),
+      );
+    });
+
+    test('follows a staged XCFramework artifact alias', () {
+      final plugin = makePlugin('new_plugin', pluginClass: 'NewPlugin');
+      final frameworkPath = p.join(tmp.path, 'store', 'NewPlugin.xcframework');
+      writeBinaryPlist(frameworkPath);
+      final interface = File(
+        p.join(
+          frameworkPath,
+          'ios-arm64',
+          'NewPlugin.framework',
+          'Modules',
+          'NewPlugin.swiftmodule',
+          'arm64-apple-ios.swiftinterface',
+        ),
+      )..createSync(recursive: true);
+      interface.writeAsStringSync('''
+@available(iOS 17.0, *)
+public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+      final staged = p.join(tmp.path, 'staged-linked-plugin');
+      final alias = p.join(staged, '.xa', 'checksum', 'NewPlugin.xcframework');
+      Directory(p.dirname(alias)).createSync(recursive: true);
+      if (Platform.isWindows) {
+        final result = Process.runSync('cmd.exe', [
+          '/c',
+          'mklink',
+          '/J',
+          alias,
+          frameworkPath,
+        ]);
+        expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+      } else {
+        Link(alias).createSync(frameworkPath);
+      }
+
+      expect(
+        GeneratedPluginsPackage.registrantSource(
+          [plugin],
+          stagedPackageDirs: {'new_plugin': staged},
+        ),
+        contains('if #available(iOS 17.0, *)'),
+      );
     });
 
     test('does not inherit availability from an intervening declaration', () {

@@ -7,7 +7,7 @@ import 'package:xcross/src/flutter/build/ios_plugin_package.dart';
 import 'package:xcross/src/flutter/build/ios_plugins.dart';
 
 void main() {
-  test('generated registrant compiles with an iOS 17 plugin at iOS 15', () {
+  test('binary iOS 17 plugin registrant compiles at iOS 15', () {
     if (!Platform.isWindows) {
       markTestSkipped('Windows Swift cross-compiler integration test');
       return;
@@ -27,10 +27,9 @@ void main() {
     final temp = Directory.systemTemp.createTempSync('xcross-availability-');
     addTearDown(() => temp.deleteSync(recursive: true));
 
-    final pluginRoot = Directory(p.join(temp.path, 'new_plugin'));
-    final sourceDirectory = Directory(
-      p.join(pluginRoot.path, 'ios', 'new_plugin', 'Sources', 'new_plugin'),
-    )..createSync(recursive: true);
+    final pluginRoot = Directory(p.join(temp.path, 'new_plugin'))..createSync();
+    final sourceDirectory = Directory(p.join(temp.path, 'native-source'))
+      ..createSync(recursive: true);
     File(p.join(pluginRoot.path, 'pubspec.yaml')).writeAsStringSync('''
 name: new_plugin
 flutter:
@@ -46,6 +45,40 @@ import Flutter
 public class NewPlugin: NSObject, FlutterPlugin {
     public static func register(with registrar: FlutterPluginRegistrar) {}
 }
+''');
+    final binaryInterface = File(
+      p.join(
+        pluginRoot.path,
+        'ios',
+        'new_plugin',
+        'NewPlugin.xcframework',
+        'ios-arm64',
+        'NewPlugin.framework',
+        'Modules',
+        'NewPlugin.swiftmodule',
+        'arm64-apple-ios.swiftinterface',
+      ),
+    )..createSync(recursive: true);
+    binaryInterface.writeAsStringSync('''
+@available(iOS 17.0, *)
+public class NewPlugin: NSObject, FlutterPlugin {}
+''');
+    File(
+      p.join(
+        pluginRoot.path,
+        'ios',
+        'new_plugin',
+        'NewPlugin.xcframework',
+        'Info.plist',
+      ),
+    ).writeAsStringSync('''
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>AvailableLibraries</key><array><dict>
+<key>LibraryIdentifier</key><string>ios-arm64</string>
+<key>SupportedPlatform</key><string>ios</string>
+<key>SupportedArchitectures</key><array><string>arm64</string></array>
+</dict></array></dict></plist>
 ''');
     File(p.join(temp.path, 'Flutter.swift')).writeAsStringSync('''
 import Foundation

@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
+import 'package:propertylistserialization/propertylistserialization.dart';
 import 'package:xcross/src/flutter/errors.dart';
 import 'package:yaml/yaml.dart';
 
@@ -92,11 +94,18 @@ final class IosPlugin {
   /// when one is present. The generated registrant uses it for
   /// a runtime guard; absent metadata must not be guessed from the package's
   /// minimum deployment target, which can be lower than the class's API.
-  String? get pluginClassIosAvailability {
+  String? get pluginClassIosAvailability => pluginClassIosAvailabilityIn();
+
+  /// Also inspect a staged package: downloaded binary targets may exist only
+  /// there after SwiftPM artifact preparation.
+  String? pluginClassIosAvailabilityIn({String? stagedPackage}) {
     final pluginClass = pluginClassIos;
     if (pluginClass == null) return null;
-    final sources = Directory(p.join(swiftPackageDir, 'Sources'));
-    if (!sources.existsSync()) return null;
+    final packageDirectories = [
+      swiftPackageDir,
+      if (stagedPackage != null && !p.equals(stagedPackage, swiftPackageDir))
+        stagedPackage,
+    ];
     final declaration = RegExp('\\bclass\\s+${RegExp.escape(pluginClass)}\\b');
     final declarationPrefix = RegExp(
       r'^(?:(?:@[A-Za-z_]\w*(?:\([^)]*\))?|public|open|internal|private|'
@@ -126,13 +135,48 @@ final class IosPlugin {
       }
     }
 
-    for (final file
-        in sources
-            .listSync(recursive: true, followLinks: false)
-            .whereType<File>()
-            .where(
-              (file) => {'.swift', '.h'}.contains(p.extension(file.path)),
-            )) {
+    Iterable<File> declarationFiles() sync* {
+      for (final packageDirectory in packageDirectories) {
+        final sources = Directory(p.join(packageDirectory, 'Sources'));
+        if (sources.existsSync()) {
+          yield* sources
+              .listSync(recursive: true, followLinks: false)
+              .whereType<File>()
+              .where(
+                (file) => {'.swift', '.h'}.contains(p.extension(file.path)),
+              );
+        }
+        final package = Directory(packageDirectory);
+        if (!package.existsSync()) continue;
+        for (final entity in package.listSync(
+          recursive: true,
+          followLinks: false,
+        )) {
+          if (!p.basename(entity.path).toLowerCase().endsWith('.xcframework')) {
+            continue;
+          }
+          // SwiftPM can place downloaded artifacts behind .xa junctions.
+          // Follow only the XCFramework root, not links inside the slice.
+          final framework = Directory(entity.path);
+          if (!framework.existsSync()) continue;
+          for (final identifier in _iosDeviceSliceIdentifiers(framework)) {
+            final slice = Directory(p.join(framework.path, identifier));
+            if (!slice.existsSync()) continue;
+            yield* slice
+                .listSync(recursive: true, followLinks: false)
+                .whereType<File>()
+                .where(
+                  (file) => {
+                    '.swiftinterface',
+                    '.h',
+                  }.contains(p.extension(file.path.toLowerCase())),
+                );
+          }
+        }
+      }
+    }
+
+    for (final file in declarationFiles()) {
       // Preserve line boundaries while masking comments and string literals;
       // examples embedded in Swift multiline strings are not declarations.
       final source = _codeOutsideCommentsAndStrings(file.readAsStringSync());
@@ -195,6 +239,43 @@ final class IosPlugin {
       }
     }
     return requiredVersion;
+  }
+
+  static Iterable<String> _iosDeviceSliceIdentifiers(Directory framework) {
+    final plist = File(p.join(framework.path, 'Info.plist'));
+    if (!plist.existsSync()) return const [];
+    try {
+      final bytes = plist.readAsBytesSync();
+      final value =
+          bytes.length >= 8 && ascii.decode(bytes.sublist(0, 8)) == 'bplist00'
+          ? PropertyListSerialization.propertyListWithData(
+              ByteData.sublistView(bytes),
+            )
+          : PropertyListSerialization.propertyListWithString(
+              utf8.decode(bytes),
+            );
+      if (value is! Map || value['AvailableLibraries'] is! List) {
+        return const [];
+      }
+      return [
+        for (final library in value['AvailableLibraries'] as List)
+          if (library is Map &&
+              library['SupportedPlatform'] == 'ios' &&
+              library['SupportedPlatformVariant'] == null &&
+              library['SupportedArchitectures'] is List &&
+              (library['SupportedArchitectures'] as List).contains('arm64') &&
+              library['LibraryIdentifier'] is String &&
+              p.basename(library['LibraryIdentifier'] as String) ==
+                  library['LibraryIdentifier'] &&
+              p.isWithin(
+                framework.path,
+                p.join(framework.path, library['LibraryIdentifier'] as String),
+              ))
+            library['LibraryIdentifier'] as String,
+      ];
+    } on Object {
+      return const [];
+    }
   }
 
   static String _codeOutsideCommentsAndStrings(String source) {

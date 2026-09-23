@@ -3262,7 +3262,11 @@ abstract final class GeneratedPluginsPackage {
 
     await _writeStable(
       p.join(sourcesDir, 'GeneratedPluginRegistrant.swift'),
-      registrantSource(plugins, verbose: verbose),
+      registrantSource(
+        plugins,
+        verbose: verbose,
+        stagedPackageDirs: pluginPackageDirs,
+      ),
     );
   }
 
@@ -6102,6 +6106,7 @@ $targetDependencies            ]
   static String registrantSource(
     List<IosPlugin> plugins, {
     bool verbose = false,
+    Map<String, String> stagedPackageDirs = const {},
   }) {
     final imports = StringBuffer();
     final registrations = StringBuffer();
@@ -6129,7 +6134,9 @@ $targetDependencies            ]
         $pluginClass.register(with: registrar)
     }''');
       }
-      final availableFrom = plugin.pluginClassIosAvailability;
+      final availableFrom = plugin.pluginClassIosAvailabilityIn(
+        stagedPackage: stagedPackageDirs[plugin.name],
+      );
       if (availableFrom == null) {
         registrations.write(registration);
       } else {
