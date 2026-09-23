@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -9,6 +10,59 @@ import 'package:xcross/src/flutter/build/runner_shim.dart';
 import 'package:xcross/src/flutter/errors.dart';
 
 void main() {
+  test(
+    'links only native frameworks needed by SwiftPM plugin symbols',
+    () async {
+      final root = Directory.systemTemp.createTempSync('xcross-native-links-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final provider = p.join(root.path, 'flutter_soloud_plugin.framework');
+      final unused = p.join(root.path, 'objective_c.framework');
+      Directory(provider).createSync();
+      Directory(unused).createSync();
+      _writeMachO(
+        p.join(provider, 'flutter_soloud_plugin'),
+        '_clearDartCallbackRegistrationsForEngine',
+        undefined: false,
+      );
+      _writeMachO(
+        p.join(unused, 'objective_c'),
+        '_unrelated',
+        undefined: false,
+      );
+      final plugin = p.join(root.path, 'libflutter-soloud.dylib');
+      _writeMachO(
+        plugin,
+        '_clearDartCallbackRegistrationsForEngine',
+        undefined: true,
+      );
+
+      final required = await nativeFrameworksRequiredByPlugins(
+        [provider, unused],
+        [plugin],
+      );
+      expect(required, [provider]);
+      final arguments = RunnerShim.linkArguments(
+        objectPath: 'Runner.o',
+        outputPath: 'Runner',
+        iosSdk: '/sdk',
+        flutterSlice: '/engine',
+        subframeworks: '/subframeworks',
+        sdkVersion: '26.0',
+        deploymentTarget: const IosDeploymentTarget('17.0'),
+        nativeAssetFrameworks: required,
+      );
+      expect(
+        arguments,
+        containsAllInOrder(['-needed_framework', 'flutter_soloud_plugin']),
+      );
+      expect(arguments, isNot(contains('objective_c')));
+      expect(
+        await nativeFrameworksRequiredByPlugins([provider, unused], const []),
+        isEmpty,
+      );
+    },
+  );
+
   test('collects only frameworks referenced by the active manifest', () {
     final root = Directory.systemTemp.createTempSync('xcross-hook-products-');
     addTearDown(() => root.deleteSync(recursive: true));
@@ -109,4 +163,31 @@ void main() {
       'current',
     );
   });
+}
+
+void _writeMachO(String path, String symbol, {required bool undefined}) {
+  const headerSize = 32;
+  const commandSize = 24;
+  const symbolSize = 16;
+  final strings = [0, ...symbol.codeUnits, 0];
+  const symbolOffset = headerSize + commandSize;
+  const stringsOffset = symbolOffset + symbolSize;
+  final bytes = Uint8List(stringsOffset + strings.length);
+  final data = ByteData.sublistView(bytes);
+  data.setUint32(0, 0xFEED_FACF, Endian.little);
+  data.setUint32(4, 0x0100_000c, Endian.little);
+  data.setUint32(12, 0x6, Endian.little);
+  data.setUint32(16, 1, Endian.little);
+  data.setUint32(20, commandSize, Endian.little);
+  data.setUint32(headerSize, 0x2, Endian.little);
+  data.setUint32(headerSize + 4, commandSize, Endian.little);
+  data.setUint32(headerSize + 8, symbolOffset, Endian.little);
+  data.setUint32(headerSize + 12, 1, Endian.little);
+  data.setUint32(headerSize + 16, stringsOffset, Endian.little);
+  data.setUint32(headerSize + 20, strings.length, Endian.little);
+  data.setUint32(symbolOffset, 1, Endian.little);
+  bytes[symbolOffset + 4] = undefined ? 0x01 : 0x0f;
+  bytes[symbolOffset + 5] = undefined ? 0 : 1;
+  bytes.setRange(stringsOffset, bytes.length, strings);
+  File(path).writeAsBytesSync(bytes);
 }
