@@ -46,11 +46,14 @@ void main() {
       ..createSync(recursive: true);
     File(p.join(flutter.path, 'Generated.xcconfig')).writeAsStringSync(
       'APP_SUFFIX = \$(inherited)generated\n'
+      'BASE = old\n'
       'MARKETING_VERSION = generated-version\n',
     );
     File(p.join(flutter.path, 'Debug.xcconfig')).writeAsStringSync(
       '#include "Generated.xcconfig"\n'
       'APP_SUFFIX[sdk=iphoneos*] = \$(inherited).device\n'
+      'DISPLAY_NAME = \$(BASE)\n'
+      'BASE = new\n'
       'CURRENT_PROJECT_VERSION = 2\n',
     );
     final packer = FlutterPacker(
@@ -61,6 +64,7 @@ void main() {
     final xml = InfoPlist.expandVars(
       '<plist><dict>'
       r'<key>Name</key><string>$(APP_SUFFIX)</string>'
+      r'<key>Display</key><string>$(DISPLAY_NAME)</string>'
       r'<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>'
       r'<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>'
       '</dict></plist>',
@@ -72,7 +76,7 @@ void main() {
         .where((entry) => entry.name.local == 'string')
         .map((entry) => entry.innerText)
         .toList();
-    expect(values, ['generated.device', '5.0', '50']);
+    expect(values, ['generated.device', 'old', '5.0', '50']);
   });
 
   test(

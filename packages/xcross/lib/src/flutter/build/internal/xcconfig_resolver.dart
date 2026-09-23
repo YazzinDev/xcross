@@ -4,6 +4,8 @@ import 'package:path/path.dart' as p;
 
 /// Resolves one Xcode build configuration in its textual include order.
 abstract final class XcconfigResolver {
+  static final _variable = RegExp(r'\$\(([^)]+)\)|\$\{([^}]+)\}');
+
   /// Flutter's generated settings are a fallback only when there is no
   /// authored Debug configuration. A Debug file that includes Generated must
   /// evaluate that include exactly once, at the point where it appears.
@@ -122,10 +124,31 @@ abstract final class XcconfigResolver {
       if (!expression.hasMatch(actual)) return;
     }
     final inherited = values[key] ?? '';
-    values[key] = assignment[3]!
+    final assigned = assignment[3]!
         .replaceAll(r'$(inherited)', inherited)
         .replaceAll(r'${inherited}', inherited);
+    // Bind references already available at this point in the include stream.
+    // Unknown forward references remain for the final resolution pass.
+    values[key] = _expandAvailable(assigned, values, <String>{});
   }
+
+  static String _expandAvailable(
+    String value,
+    Map<String, String> values,
+    Set<String> stack,
+  ) => value.replaceAllMapped(_variable, (match) {
+    final reference = match[1] ?? match[2]!;
+    final current = values[reference];
+    if (current == null) return match[0]!;
+    if (!stack.add(reference)) {
+      throw FormatException('xcconfig variable cycle: $reference');
+    }
+    try {
+      return _expandAvailable(current, values, stack);
+    } finally {
+      stack.remove(reference);
+    }
+  });
 
   static Map<String, String> _expandValues(Map<String, String> values) {
     final expanded = <String, String>{};
@@ -134,15 +157,12 @@ abstract final class XcconfigResolver {
       if (!stack.add(key)) {
         throw FormatException('xcconfig variable cycle: $key');
       }
-      final value = values[key]!.replaceAllMapped(
-        RegExp(r'\$\(([^)]+)\)|\$\{([^}]+)\}'),
-        (match) {
-          final reference = match[1] ?? match[2]!;
-          return values.containsKey(reference)
-              ? resolve(reference, stack)
-              : match[0]!;
-        },
-      );
+      final value = values[key]!.replaceAllMapped(_variable, (match) {
+        final reference = match[1] ?? match[2]!;
+        return values.containsKey(reference)
+            ? resolve(reference, stack)
+            : match[0]!;
+      });
       stack.remove(key);
       return expanded[key] = value;
     }

@@ -204,18 +204,28 @@ APP[sdk=iphoneos*] = $(inherited).device
     test('applies included assignments at their textual position', () async {
       final tmp = await Directory.systemTemp.createTemp('xcconfig-order-');
       addTearDown(() => tmp.delete(recursive: true));
-      File(
-        p.join(tmp.path, 'Shared.xcconfig'),
-      ).writeAsStringSync('APP = included\n');
+      File(p.join(tmp.path, 'Shared.xcconfig')).writeAsStringSync(
+        'BASE = included\n'
+        r'APP = $(BASE)'
+        '\n',
+      );
       final debug = File(p.join(tmp.path, 'Debug.xcconfig'))
         ..writeAsStringSync(
-          'APP = before\n'
+          'BASE = before\n'
           '#include "Shared.xcconfig"\n'
-          r'APP = $(inherited).after'
-          '\n',
+          'BASE = after\n'
+          r'AFTER = ${BASE}'
+          '\n'
+          r'FORWARD = $(LATER)'
+          '\n'
+          'LATER = later\n',
         );
       expect(await InfoPlist.readXcconfigFiles([debug.path]), {
-        'APP': 'included.after',
+        'BASE': 'after',
+        'APP': 'included',
+        'AFTER': 'after',
+        'FORWARD': 'later',
+        'LATER': 'later',
       });
     });
   });
