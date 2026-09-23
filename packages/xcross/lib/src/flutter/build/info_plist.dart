@@ -219,6 +219,22 @@ abstract final class InfoPlist {
     return result;
   }
 
+  /// Substitute plist values through XML nodes so authored xcconfig values
+  /// containing `&`, `<`, or quotes remain valid XML.
+  static String expandXmlVars(String xml, Map<String, String> subs) {
+    final document = XmlDocument.parse(xml);
+    for (final node in document.descendants) {
+      if (node is XmlText) {
+        node.value = expandVars(node.value, subs);
+      } else if (node is XmlElement) {
+        for (final attribute in node.attributes) {
+          attribute.value = expandVars(attribute.value, subs);
+        }
+      }
+    }
+    return document.toXmlString();
+  }
+
   /// Compatibility entry point for evaluating one xcconfig text value.
   static Map<String, String> parseXcconfig(
     String text, {

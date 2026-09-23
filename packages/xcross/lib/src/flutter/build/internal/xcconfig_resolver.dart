@@ -15,11 +15,15 @@ abstract final class XcconfigResolver {
     String configuration = 'Debug',
     String sdk = 'iphoneos',
     String arch = 'arm64',
+    Map<String, String> defaults = const {},
+    Map<String, String> overrides = const {},
   }) => readFiles(
     [if (File(debugPath).existsSync()) debugPath else generatedPath],
     configuration: configuration,
     sdk: sdk,
     arch: arch,
+    defaults: defaults,
+    overrides: overrides,
   );
 
   static Map<String, String> parseText(
@@ -27,13 +31,25 @@ abstract final class XcconfigResolver {
     String configuration = 'Debug',
     String sdk = 'iphoneos',
     String arch = 'arm64',
+    Map<String, String> defaults = const {},
+    Map<String, String> overrides = const {},
   }) {
     final values = <String, String>{};
+    final priorities = <String, (int, int)>{};
     final comments = _XcconfigComments();
     for (final line in text.split('\n')) {
-      _applyAssignment(comments.strip(line), values, configuration, sdk, arch);
+      _applyAssignment(
+        comments.strip(line),
+        values,
+        priorities,
+        configuration,
+        sdk,
+        arch,
+        defaults,
+        overrides,
+      );
     }
-    return _expandValues(values);
+    return _resolvedValues(values, defaults, overrides);
   }
 
   /// Process each root and its required or optional includes in text order.
@@ -42,8 +58,11 @@ abstract final class XcconfigResolver {
     String configuration = 'Debug',
     String sdk = 'iphoneos',
     String arch = 'arm64',
+    Map<String, String> defaults = const {},
+    Map<String, String> overrides = const {},
   }) async {
     final values = <String, String>{};
+    final priorities = <String, (int, int)>{};
     final stack = <String>{};
 
     Future<void> read(String path, {required bool optional}) async {
@@ -71,7 +90,16 @@ abstract final class XcconfigResolver {
               optional: include[1] == '?',
             );
           } else {
-            _applyAssignment(line, values, configuration, sdk, arch);
+            _applyAssignment(
+              line,
+              values,
+              priorities,
+              configuration,
+              sdk,
+              arch,
+              defaults,
+              overrides,
+            );
           }
         }
       } finally {
@@ -82,15 +110,18 @@ abstract final class XcconfigResolver {
     for (final path in paths) {
       await read(path, optional: true);
     }
-    return _expandValues(values);
+    return _resolvedValues(values, defaults, overrides);
   }
 
   static void _applyAssignment(
     String raw,
     Map<String, String> values,
+    Map<String, (int, int)> priorities,
     String configuration,
     String sdk,
     String arch,
+    Map<String, String> defaults,
+    Map<String, String> overrides,
   ) {
     final line = raw.trim();
     if (line.isEmpty || line.startsWith('//') || line.startsWith('#')) return;
@@ -104,6 +135,8 @@ abstract final class XcconfigResolver {
     }
     final key = assignment[1]!;
     final head = assignment[2]!;
+    var conditionCount = 0;
+    var literalCount = 0;
     for (final match in RegExp(r'\[([^\]]+)\]').allMatches(head)) {
       final qualifier = match[1]!;
       final eq = qualifier.indexOf('=');
@@ -122,33 +155,62 @@ abstract final class XcconfigResolver {
         caseSensitive: false,
       );
       if (!expression.hasMatch(actual)) return;
+      conditionCount++;
+      literalCount += pattern.replaceAll('*', '').length;
     }
-    final inherited = values[key] ?? '';
+    // A matching conditional value outranks the unconditional value even if
+    // the latter appears later. Equal conditions retain last-assignment order.
+    final previous = priorities[key];
+    if (previous != null &&
+        (conditionCount < previous.$1 ||
+            (conditionCount == previous.$1 && literalCount < previous.$2))) {
+      return;
+    }
+    final inherited = values[key] ?? defaults[key] ?? '';
     final assigned = assignment[3]!
         .replaceAll(r'$(inherited)', inherited)
         .replaceAll(r'${inherited}', inherited);
     // Bind references already available at this point in the include stream.
     // Unknown forward references remain for the final resolution pass.
-    values[key] = _expandAvailable(assigned, values, <String>{});
+    values[key] = _expandAvailable(
+      assigned,
+      values,
+      defaults,
+      overrides,
+      <String>{},
+    );
+    priorities[key] = (conditionCount, literalCount);
   }
 
   static String _expandAvailable(
     String value,
     Map<String, String> values,
+    Map<String, String> defaults,
+    Map<String, String> overrides,
     Set<String> stack,
   ) => value.replaceAllMapped(_variable, (match) {
     final reference = match[1] ?? match[2]!;
-    final current = values[reference];
+    final current =
+        overrides[reference] ?? values[reference] ?? defaults[reference];
     if (current == null) return match[0]!;
     if (!stack.add(reference)) {
       throw FormatException('xcconfig variable cycle: $reference');
     }
     try {
-      return _expandAvailable(current, values, stack);
+      return _expandAvailable(current, values, defaults, overrides, stack);
     } finally {
       stack.remove(reference);
     }
   });
+
+  static Map<String, String> _resolvedValues(
+    Map<String, String> values,
+    Map<String, String> defaults,
+    Map<String, String> overrides,
+  ) {
+    final expanded = _expandValues({...defaults, ...values, ...overrides});
+    return {for (final key in values.keys) key: expanded[key]!, ...overrides};
+  }
 
   static Map<String, String> _expandValues(Map<String, String> values) {
     final expanded = <String, String>{};

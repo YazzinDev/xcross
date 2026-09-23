@@ -30,6 +30,21 @@ void main() {
     );
   });
 
+  test('escapes substituted xcconfig text in the final plist XML', () {
+    final expanded = InfoPlist.expandXmlVars(
+      r'<?xml version="1.0"?><plist><dict><key>Name</key><string>$(DISPLAY_NAME)</string></dict></plist>',
+      {'DISPLAY_NAME': 'Fish & Chips <Good>'},
+    );
+    expect(expanded, contains('Fish &amp; Chips &lt;Good>'));
+    final finalPlist = InfoPlist.applyDebugVmServiceDiscovery(expanded);
+    expect(
+      XmlDocument.parse(
+        finalPlist,
+      ).rootElement.getElement('dict')!.findElements('string').first.innerText,
+      'Fish & Chips <Good>',
+    );
+  });
+
   group('parseXcconfig', () {
     test('parses KEY = VALUE lines, stripping comments, blanks, config '
         'suffixes, and only splitting on the first "="', () {
@@ -109,11 +124,24 @@ QUOTED = "literal // value"
 PRODUCT_BUNDLE_IDENTIFIER = com.example.device
 PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*] = com.example.sim
 PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*][arch=arm64] = com.example.arm
+PRODUCT_BUNDLE_IDENTIFIER = com.example.later.generic
 OTHER[config=Release] = release
 OTHER[config=Debug] = debug
 ''');
         expect(settings['PRODUCT_BUNDLE_IDENTIFIER'], 'com.example.arm');
         expect(settings['OTHER'], 'debug');
+      },
+    );
+
+    test(
+      'prefers an exact SDK selector over later wildcard and base values',
+      () {
+        final settings = InfoPlist.parseXcconfig('''
+APP_NAME[sdk=iphoneos26.5] = exact
+APP_NAME[sdk=iphoneos*] = wildcard
+APP_NAME = generic
+''', sdk: 'iphoneos26.5');
+        expect(settings['APP_NAME'], 'exact');
       },
     );
 

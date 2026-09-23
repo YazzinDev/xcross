@@ -54,6 +54,10 @@ void main() {
       'APP_SUFFIX[sdk=iphoneos*] = \$(inherited).device\n'
       'DISPLAY_NAME = \$(BASE)\n'
       'BASE = new\n'
+      'APP_VERSION = \$(FLUTTER_BUILD_NAME)\n'
+      'APP_BUILD = \${FLUTTER_BUILD_NUMBER}\n'
+      'SDK_NAME[sdk=iphoneos26.5] = exact-sdk\n'
+      'SDK_NAME = generic-sdk\n'
       'CURRENT_PROJECT_VERSION = 2\n',
     );
     final packer = FlutterPacker(
@@ -61,14 +65,17 @@ void main() {
       bundleId: 'com.example.app',
       options: const FlutterBuildOptions(buildName: '5.0', buildNumber: '50'),
     );
-    final xml = InfoPlist.expandVars(
+    final xml = InfoPlist.expandXmlVars(
       '<plist><dict>'
       r'<key>Name</key><string>$(APP_SUFFIX)</string>'
       r'<key>Display</key><string>$(DISPLAY_NAME)</string>'
+      r'<key>AliasVersion</key><string>$(APP_VERSION)</string>'
+      r'<key>AliasBuild</key><string>$(APP_BUILD)</string>'
+      r'<key>SDKName</key><string>$(SDK_NAME)</string>'
       r'<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>'
       r'<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>'
       '</dict></plist>',
-      await packer.buildSubstitutionMap(),
+      await packer.buildSubstitutionMap(sdkName: 'iphoneos26.5'),
     );
     final values = XmlDocument.parse(xml).rootElement
         .getElement('dict')!
@@ -76,7 +83,15 @@ void main() {
         .where((entry) => entry.name.local == 'string')
         .map((entry) => entry.innerText)
         .toList();
-    expect(values, ['generated.device', 'old', '5.0', '50']);
+    expect(values, [
+      'generated.device',
+      'old',
+      '5.0',
+      '50',
+      'exact-sdk',
+      '5.0',
+      '50',
+    ]);
   });
 
   test(

@@ -167,6 +167,7 @@ final class FlutterPacker {
       appFramework: appFramework,
       xcframework: runnerResult.xcframework,
       runnerBinary: runnerResult.runnerBinary,
+      sdkName: runnerResult.sdkName,
       pluginLibraries: pluginsBuild?.dylibPaths ?? const [],
       nativeAssetFrameworks: nativeAssets.frameworks,
       deploymentTarget: deploymentTarget,
@@ -427,7 +428,11 @@ final class FlutterPacker {
       verbose: verbose,
     );
 
-    return RunnerBinary(xcframework: xcframework, runnerBinary: runnerBinary);
+    return RunnerBinary(
+      xcframework: xcframework,
+      runnerBinary: runnerBinary,
+      sdkName: p.basenameWithoutExtension(darwin.iPhoneOSSdk()).toLowerCase(),
+    );
   }
 
   /// Stage the bundle in a temp directory, then move it to
@@ -436,6 +441,7 @@ final class FlutterPacker {
     required String appFramework,
     required String xcframework,
     required String runnerBinary,
+    required String sdkName,
     required List<String> pluginLibraries,
     required List<String> nativeAssetFrameworks,
     required IosDeploymentTarget deploymentTarget,
@@ -450,6 +456,7 @@ final class FlutterPacker {
       appFramework: appFramework,
       flutterFramework: p.join(xcframework, 'ios-arm64', 'Flutter.framework'),
       runnerBinary: runnerBinary,
+      sdkName: sdkName,
       pluginLibraries: pluginLibraries,
       nativeAssetFrameworks: nativeAssetFrameworks,
       deploymentTarget: deploymentTarget,
@@ -475,6 +482,7 @@ final class FlutterPacker {
     required String appFramework,
     required String flutterFramework,
     required String runnerBinary,
+    required String sdkName,
     required List<String> pluginLibraries,
     required List<String> nativeAssetFrameworks,
     required IosDeploymentTarget deploymentTarget,
@@ -503,7 +511,11 @@ final class FlutterPacker {
       projectRoot: projectRoot,
       bundleDir: bundleDir,
     );
-    await _writeInfoPlist(bundleDir, deploymentTarget: deploymentTarget);
+    await _writeInfoPlist(
+      bundleDir,
+      deploymentTarget: deploymentTarget,
+      sdkName: sdkName,
+    );
   }
 
   /// Copy each built `.appex` into the app's `PlugIns` directory, the only
@@ -554,6 +566,7 @@ final class FlutterPacker {
   Future<void> _writeInfoPlist(
     String bundleDir, {
     required IosDeploymentTarget deploymentTarget,
+    required String sdkName,
   }) async {
     var plistXml = await _loadPlistTemplate();
 
@@ -561,7 +574,10 @@ final class FlutterPacker {
     // keys see already-substituted values from the template, and before
     // storyboard stripping so $(VAR)-valued storyboard names are resolved
     // before the .storyboardc filesystem probe.
-    plistXml = InfoPlist.expandVars(plistXml, await buildSubstitutionMap());
+    plistXml = InfoPlist.expandXmlVars(
+      plistXml,
+      await buildSubstitutionMap(sdkName: sdkName),
+    );
     plistXml = InfoPlist.applyIosRequiredKeys(
       plistXml,
       bundleId: bundleId,
@@ -601,7 +617,9 @@ final class FlutterPacker {
   ///      to `Generated.xcconfig` only when no Debug file exists.
   ///   3. Explicit `--build-name` / `--build-number` CLI flags.
   @visibleForTesting
-  Future<Map<String, String>> buildSubstitutionMap() async {
+  Future<Map<String, String>> buildSubstitutionMap({
+    String sdkName = 'iphoneos',
+  }) async {
     final subs = <String, String>{
       'EXECUTABLE_NAME': PlistDefaults.executable,
       'PRODUCT_NAME': PlistDefaults.executable,
@@ -628,21 +646,26 @@ final class FlutterPacker {
     }
 
     final flutterConfigDirectory = p.join(projectRoot, 'ios', 'Flutter');
+    final overrides = <String, String>{
+      if (options.buildName case final String name) ...{
+        'FLUTTER_BUILD_NAME': name,
+        'MARKETING_VERSION': name,
+      },
+      if (options.buildNumber case final String number) ...{
+        'FLUTTER_BUILD_NUMBER': number,
+        'CURRENT_PROJECT_VERSION': number,
+      },
+    };
     subs.addAll(
       await XcconfigResolver.readDebugConfiguration(
         debugPath: p.join(flutterConfigDirectory, 'Debug.xcconfig'),
         generatedPath: p.join(flutterConfigDirectory, 'Generated.xcconfig'),
+        sdk: sdkName,
+        defaults: subs,
+        overrides: overrides,
       ),
     );
-
-    if (options.buildName != null) {
-      subs['FLUTTER_BUILD_NAME'] = options.buildName!;
-      subs['MARKETING_VERSION'] = options.buildName!;
-    }
-    if (options.buildNumber != null) {
-      subs['FLUTTER_BUILD_NUMBER'] = options.buildNumber!;
-      subs['CURRENT_PROJECT_VERSION'] = options.buildNumber!;
-    }
+    subs.addAll(overrides);
 
     return subs;
   }
