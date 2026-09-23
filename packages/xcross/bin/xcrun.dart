@@ -51,13 +51,14 @@ String? xcrunShimResponse(List<String> arguments, {String? executable}) {
   final shimSdk = _readShimSdk(xcrunExecutable);
   if (shimSdk == null) return null;
 
-  _requireIPhoneOsSdk(arguments, shimSdk);
+  final wrapperArguments = _wrapperArguments(arguments);
+  _requireIPhoneOsSdk(wrapperArguments, shimSdk);
 
-  if (arguments.contains('--show-sdk-path')) return shimSdk;
-  if (arguments.contains('--show-sdk-platform-path')) {
+  if (wrapperArguments.contains('--show-sdk-path')) return shimSdk;
+  if (wrapperArguments.contains('--show-sdk-platform-path')) {
     return _sdkPlatformPath(shimSdk);
   }
-  return findShimTool(arguments, executable: xcrunExecutable);
+  return findShimTool(wrapperArguments, executable: xcrunExecutable);
 }
 
 /// Resolves a compiler shim without consulting user configuration.
@@ -70,10 +71,11 @@ String? findShimTool(List<String> arguments, {String? executable}) {
   final xcrunExecutable = executable ?? Platform.resolvedExecutable;
   if (_readShimSdk(xcrunExecutable) == null) return null;
 
-  final find = arguments.indexOf('--find');
-  if (find == -1 || find + 1 >= arguments.length) return null;
+  final wrapperArguments = _wrapperArguments(arguments);
+  final find = wrapperArguments.indexOf('--find');
+  if (find == -1 || find + 1 >= wrapperArguments.length) return null;
 
-  final tool = arguments[find + 1];
+  final tool = wrapperArguments[find + 1];
   if (!{'clang', 'cc', 'ar', 'ld'}.contains(tool)) return null;
 
   final candidate = p.join(p.dirname(xcrunExecutable), '$tool.exe');
@@ -84,6 +86,7 @@ Future<int> runXcrun(
   List<String> arguments, {
   DarwinSdk? sdk,
   Future<String?> Function(String name)? findOnPath,
+  Future<int> Function(String tool, List<String> arguments)? runTool,
 }) async {
   sdk ??= DarwinSdk.current();
   if (sdk == null) {
@@ -94,33 +97,35 @@ Future<int> runXcrun(
   }
 
   try {
-    final requested = _requestedSdk(arguments);
+    final wrapperArguments = _wrapperArguments(arguments);
+    final requested = _requestedSdk(wrapperArguments);
     if (requested != null && !requested.toLowerCase().startsWith('iphoneos')) {
       throw FormatException('SDK $requested is not installed');
     }
     if (requested != null) {
-      _requireIPhoneOsSdk(arguments, sdk.iPhoneOSSdk());
+      _requireIPhoneOsSdk(wrapperArguments, sdk.iPhoneOSSdk());
     }
   } on FormatException catch (error) {
     stderr.writeln('xcrun: $error');
     return 1;
   }
 
-  if (arguments.contains('--show-sdk-path')) {
+  final wrapperArguments = _wrapperArguments(arguments);
+  if (wrapperArguments.contains('--show-sdk-path')) {
     stdout.writeln(sdk.iPhoneOSSdk());
     return 0;
   }
-  if (arguments.contains('--show-sdk-platform-path')) {
+  if (wrapperArguments.contains('--show-sdk-platform-path')) {
     stdout.writeln(_sdkPlatformPath(sdk.iPhoneOSSdk()));
     return 0;
   }
 
-  final find = arguments.indexOf('--find');
+  final find = wrapperArguments.indexOf('--find');
   if (find >= 0) {
-    if (find + 1 >= arguments.length) return 1;
+    if (find + 1 >= wrapperArguments.length) return 1;
     final tool = await _resolveTool(
       sdk,
-      arguments[find + 1],
+      wrapperArguments[find + 1],
       findOnPath: findOnPath,
     );
     if (tool == null) return 1;
@@ -139,7 +144,9 @@ Future<int> runXcrun(
     stderr.writeln('xcrun: unknown tool ${arguments[toolIndex]}');
     return 1;
   }
-  return runResolvedTool(tool, arguments.sublist(toolIndex + 1));
+  final toolArguments = arguments.sublist(toolIndex + 1);
+  if (runTool != null) return runTool(tool, toolArguments);
+  return runResolvedTool(tool, toolArguments);
 }
 
 /// Streams a resolved tool directly and preserves its exact exit status.
@@ -162,9 +169,17 @@ int _toolIndex(List<String> arguments) {
       continue;
     }
     if (arguments[index].startsWith('--sdk=')) continue;
+    if (arguments[index] == '--find') return -1;
     if (!arguments[index].startsWith('-')) return index;
   }
   return -1;
+}
+
+/// Wrapper flags end at the selected tool; everything after it belongs to the
+/// child, even when an argument has the same spelling as an xcrun option.
+List<String> _wrapperArguments(List<String> arguments) {
+  final toolIndex = _toolIndex(arguments);
+  return arguments.sublist(0, toolIndex < 0 ? arguments.length : toolIndex);
 }
 
 void _requireIPhoneOsSdk(List<String> arguments, String installedSdk) {

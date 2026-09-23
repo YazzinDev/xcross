@@ -122,6 +122,18 @@ void main() {
         isNull,
         reason: 'clang --version must reach the selected compiler',
       );
+      for (final probe in ['--show-sdk-path', '--show-sdk-platform-path']) {
+        expect(
+          xcrun.xcrunShimResponse([
+            '--sdk',
+            'iphoneos',
+            'clang',
+            probe,
+          ], executable: executable.path),
+          isNull,
+          reason: '$probe belongs to clang after tool selection',
+        );
+      }
       expect(
         xcrun.xcrunShimResponse(const [
           '--sdk',
@@ -160,5 +172,35 @@ void main() {
       ], sdk: DarwinSdk('/unused')),
       1,
     );
+  });
+
+  test('forwards child flags unchanged without a sidecar', () async {
+    final forwarded = <String>[];
+    for (final probe in [
+      '--show-sdk-path',
+      '--show-sdk-platform-path',
+      '--sdk=macosx',
+      '--find',
+    ]) {
+      expect(
+        await xcrun.runXcrun(
+          ['clang', probe],
+          sdk: DarwinSdk('/unused'),
+          findOnPath: (_) async => '/fake/clang',
+          runTool: (tool, arguments) async {
+            expect(tool, '/fake/clang');
+            forwarded.addAll(arguments);
+            return 37;
+          },
+        ),
+        37,
+      );
+    }
+    expect(forwarded, [
+      '--show-sdk-path',
+      '--show-sdk-platform-path',
+      '--sdk=macosx',
+      '--find',
+    ]);
   });
 }
