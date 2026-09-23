@@ -117,6 +117,33 @@ QUOTED = "literal // value"
       expect(settings['QUOTED'], '"literal // value"');
     });
 
+    test('joins backslash-continued assignments in parsed text', () {
+      final settings = InfoPlist.parseXcconfig(r'''
+OTHER_SWIFT_FLAGS = $(inherited) \
+  -DDEBUG
+DISPLAY_NAME = Fish \
+  & Chips
+''');
+      expect(settings['OTHER_SWIFT_FLAGS']!.trim(), '-DDEBUG');
+      expect(settings['DISPLAY_NAME'], 'Fish & Chips');
+    });
+
+    test('joins backslash-continued assignments in included files', () async {
+      final tmp = await Directory.systemTemp.createTemp('xcconfig-continued-');
+      addTearDown(() => tmp.delete(recursive: true));
+      File(p.join(tmp.path, 'Shared.xcconfig')).writeAsStringSync(r'''
+OTHER_SWIFT_FLAGS = $(inherited) \
+  -DDEBUG
+DISPLAY_NAME = Fish \
+  & Chips
+''');
+      final debug = File(p.join(tmp.path, 'Debug.xcconfig'))
+        ..writeAsStringSync('#include "Shared.xcconfig"\n');
+      final settings = await InfoPlist.readXcconfigFiles([debug.path]);
+      expect(settings['OTHER_SWIFT_FLAGS']!.trim(), '-DDEBUG');
+      expect(settings['DISPLAY_NAME'], 'Fish & Chips');
+    });
+
     test(
       'evaluates SDK and architecture qualifiers before assigning values',
       () {

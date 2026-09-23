@@ -36,10 +36,9 @@ abstract final class XcconfigResolver {
   }) {
     final values = <String, String>{};
     final priorities = <String, (int, int)>{};
-    final comments = _XcconfigComments();
-    for (final line in text.split('\n')) {
+    for (final line in _logicalLines(text.split('\n'))) {
       _applyAssignment(
-        comments.strip(line),
+        line,
         values,
         priorities,
         configuration,
@@ -76,9 +75,7 @@ abstract final class XcconfigResolver {
         throw FormatException('xcconfig include cycle at $resolved');
       }
       try {
-        final comments = _XcconfigComments();
-        for (final raw in await file.readAsLines()) {
-          final line = comments.strip(raw).trim();
+        for (final line in _logicalLines(await file.readAsLines())) {
           final include = RegExp(
             r'^#include(\?)?\s+(?:"([^"]+)"|<([^>]+)>)\s*$',
           ).firstMatch(line);
@@ -111,6 +108,32 @@ abstract final class XcconfigResolver {
       await read(path, optional: true);
     }
     return _resolvedValues(values, defaults, overrides);
+  }
+
+  /// Join Xcode's backslash-continued physical lines before parsing settings.
+  static Iterable<String> _logicalLines(Iterable<String> lines) sync* {
+    final comments = _XcconfigComments();
+    var pending = '';
+    for (final raw in lines) {
+      final line = comments.strip(raw).trimRight();
+      var trailingBackslashes = 0;
+      for (
+        var index = line.length - 1;
+        index >= 0 && line[index] == r'\';
+        index--
+      ) {
+        trailingBackslashes++;
+      }
+      if (trailingBackslashes.isOdd) {
+        pending += '${line.substring(0, line.length - 1).trim()} ';
+        continue;
+      }
+      yield (pending + line.trimLeft()).trim();
+      pending = '';
+    }
+    if (pending.isNotEmpty) {
+      throw const FormatException('Unterminated xcconfig line continuation');
+    }
   }
 
   static void _applyAssignment(
