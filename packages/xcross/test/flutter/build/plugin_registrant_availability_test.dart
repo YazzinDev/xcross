@@ -110,5 +110,23 @@ import Foundation
       0,
       reason: '${generated.stdout}${generated.stderr}',
     );
+    final sil = compile(['-emit-sil', '-Onone', registrant.path]);
+    expect(sil.exitCode, 0, reason: '${sil.stdout}${sil.stderr}');
+    final silSource = sil.stdout as String;
+    final functionStart = silSource.indexOf(
+      '// xcrossRegisterGeneratedPlugins(_:)',
+    );
+    expect(functionStart, isNonNegative);
+    final functionEnd = silSource.indexOf(
+      '} // end sil function',
+      functionStart,
+    );
+    expect(functionEnd, isNonNegative);
+    final registrationFunction = silSource.substring(
+      functionStart,
+      functionEnd,
+    );
+    expect(registrationFunction, contains('_stdlib_isOSVersionAtLeast'));
+    expect(registrationFunction, contains('cond_br'));
   });
 }

@@ -6087,13 +6087,7 @@ $dependencies    ],
         .target(
             name: "$_pluginsProductName",
             dependencies: [
-$targetDependencies            ],
-            // Source-annotated classes get #available runtime guards below.
-            // Imported binary metadata may still require a compile-only
-            // fallback; keep it on this target, never dependency targets.
-            swiftSettings: [
-                .unsafeFlags(["-Xfrontend", "-disable-availability-checking"])
-            ]
+$targetDependencies            ]
         )
     ]
 )
