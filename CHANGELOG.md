@@ -1,3 +1,18 @@
+## 1.5.0
+
+- Build and run real Compose Multiplatform apps on a device from Linux and Windows: stage Compose resources, honour static frameworks, keep sibling project klibs in the link, expand `$(VAR)` build settings in Info.plist, and find nested `iosApp` layouts.
+- Speed up Compose debug links with per-library Kotlin/Native compiler caches, reuse the Gradle daemon, and compile plus dump dependencies in one Gradle invocation.
+- Link Compose apps on Windows with the official LLVM installer: fall back to `llvm-ar` when `llvm-libtool-darwin` is missing, and drop Kotlin/Native platform klibs Gradle resolves from a second distribution.
+- Link the iOS compiler runtime into the Compose runner, fixing `___isPlatformVersionAtLeast` on Linux.
+- Sign an App ID the team already owns under its real bundle id instead of an `XCR-` qualified one, so Sign in with Apple, passkeys, push and associated domains keep working.
+- Enable the App ID capabilities a Compose app's entitlements declare, for the app and its extensions, and sign with the app's declared entitlements where the profile grants a wildcard.
+- Only delete provisioning profiles xcross created, or a lone development profile occupying the App ID's only slot. Release profiles are never deleted.
+- Repair Windows Flutter iOS builds and debug sessions, recover missing SwiftUI `State` macros in staged sources, and reject native asset framework symlinks that escape the framework.
+- Make `examples/flutter_example` build on Linux: answer `xcrun --version`, shim `ar`, and prefer a clang new enough for the SDK's libc++.
+- Rewrite `arm64e.x1` stub targets so Xcode 27 SDKs link with released `ld64.lld`.
+- Render dim and TUI text readably on dark terminal themes.
+- Add a Compose integration workflow that builds `examples/compose_app` on Linux and Windows.
+
 ## 1.4.5
 
 - Stop cold Flutter iOS builds deadlocking on `git cat-file --batch`: read the process output while the requests are still being written, so a symlink-heavy SwiftPM checkout no longer fills the pipe buffer and hangs the build indefinitely.
