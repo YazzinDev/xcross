@@ -2721,13 +2721,15 @@ let env = getenv("EXPERIMENTAL_SPM_BUILDS")
 
       // A dangling Git link can acquire a directory target after checkout.
       // On Windows, its original file-typed reparse point must be replaced.
+      // A POSIX symlink already follows its new target, so only Windows has
+      // something to replace.
       Directory(p.join(repo, 'Sources', 'not-present')).createSync();
       expect(
         await GeneratedPluginsPackage.materializeCheckoutSymlinks(
           scratch,
           symlinks: true,
         ),
-        isTrue,
+        Platform.isWindows,
       );
       expect(Directory(danglingLink.path).existsSync(), isTrue);
 
@@ -4641,6 +4643,7 @@ let package = Package(
           GeneratedPluginsPackage.plannedSwiftInteropTargets(
             buildDir,
             candidates: const {'PluginStore', 'PluginAuth'},
+            windows: true,
           ),
           ['PluginAuth', 'PluginStore', 'Unrelated'],
         );
@@ -4651,6 +4654,7 @@ let package = Package(
           GeneratedPluginsPackage.plannedSwiftInteropTargets(
             buildDir,
             candidates: const {'PluginStore', 'PluginAuth'},
+            windows: true,
           ),
           ['PluginStore', 'Unrelated'],
           reason: 'a header already on disk needs no prebuild',
@@ -4741,6 +4745,7 @@ let package = Package(
         GeneratedPluginsPackage.plannedSwiftInteropTargets(
           buildDir,
           candidates: const {'example_plugin'},
+          windows: true,
         ),
         ['InternalSwiftTarget'],
       );
@@ -4809,6 +4814,7 @@ let package = Package(
         GeneratedPluginsPackage.plannedSwiftInteropTargets(
           buildDir,
           candidates: const {'example_plugin'},
+          windows: true,
         ),
         ['InternalSwiftTarget'],
       );
