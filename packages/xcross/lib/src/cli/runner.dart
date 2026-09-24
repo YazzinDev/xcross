@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:apple_developer_kit/apple_developer_kit.dart';
 import 'package:args/command_runner.dart';
@@ -8,6 +9,7 @@ import 'package:cli_util/cli_logging.dart';
 import 'package:completion/completion.dart';
 import 'package:dart_mobile_device/dart_mobile_device.dart';
 import 'package:darwin_sdk_kit/darwin_sdk_kit.dart';
+import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import 'package:xcross/src/cli/basic/auth_command.dart';
 import 'package:xcross/src/cli/basic/clean_command.dart';
@@ -70,6 +72,13 @@ Future<int?> runPreparedToolAlias(
   if (name == 'dsymutil' && !File(target).existsSync()) {
     return 0;
   }
+  if (name == 'libtool' && !File(target).existsSync()) {
+    final archiver = _llvmArchiverFor(target);
+    if (archiver != null) {
+      final converted = libtoolAsArArguments(arguments);
+      if (converted != null) return invoke(archiver, converted);
+    }
+  }
   final prefix = File('$path.args');
   final forwarded = prefix.existsSync() && _isAppleCompilerInvocation(arguments)
       ? [
@@ -78,6 +87,97 @@ Future<int?> runPreparedToolAlias(
         ]
       : arguments;
   return invoke(target, forwarded);
+}
+
+/// `llvm-ar` next to a missing `llvm-libtool-darwin`: the official LLVM
+/// Windows installer ships the former but not the latter.
+String? _llvmArchiverFor(String libtool) {
+  final directory = libtool.contains(r'\')
+      ? p.windows.dirname(libtool)
+      : p.dirname(libtool);
+  final extension = libtool.toLowerCase().endsWith('.exe') ? '.exe' : '';
+  final candidate = p.join(directory, 'llvm-ar$extension');
+  return File(candidate).existsSync() ? candidate : null;
+}
+
+/// Rewrites the `libtool -static` invocation Kotlin/Native issues as an
+/// equivalent `llvm-ar` one, or null when it is not a static archive.
+@visibleForTesting
+List<String>? libtoolAsArArguments(List<String> arguments) {
+  String? output;
+  final inputs = <String>[];
+  var isStatic = false;
+  for (var index = 0; index < arguments.length; index++) {
+    final argument = arguments[index];
+    switch (argument) {
+      case '-static':
+        isStatic = true;
+      case '-D' || '-no_warning_for_no_symbols' || '-s' || '-a' || '-c':
+        break;
+      case '-o' when index + 1 < arguments.length:
+        output = arguments[++index];
+      case '-arch_only' when index + 1 < arguments.length:
+        index++;
+      case '-filelist' when index + 1 < arguments.length:
+        final list = File(arguments[++index].split(',').first);
+        if (!list.existsSync()) return null;
+        inputs.addAll(
+          list
+              .readAsLinesSync()
+              .map((line) => line.trim())
+              .where((line) => line.isNotEmpty),
+        );
+      default:
+        if (argument.startsWith('-')) return null;
+        inputs.add(argument);
+    }
+  }
+  if (!isStatic || output == null) return null;
+  final existing = File(output);
+  if (existing.existsSync()) existing.deleteSync();
+  final thinDir = Directory('$output.slices');
+  return [
+    'qLsD',
+    '--format=darwin',
+    output,
+    for (final (index, input) in inputs.indexed)
+      _arm64Slice(input, thinDir, index) ?? input,
+  ];
+}
+
+/// Mach-O universal header magic, big-endian.
+const _fatMagic = 0xcafebabe;
+const _cpuTypeArm64 = 0x0100000c;
+
+/// Writes the arm64 slice of the universal file [path] into [dir] and returns
+/// its path, or null when [path] is not universal. `libtool -arch_only arm64`
+/// does this implicitly; `llvm-ar` cannot read universal archives at all.
+String? _arm64Slice(String path, Directory dir, int index) {
+  final file = File(path);
+  if (!file.existsSync()) return null;
+  final handle = file.openSync();
+  try {
+    final header = handle.readSync(8);
+    if (header.length < 8) return null;
+    final data = ByteData.sublistView(header);
+    if (data.getUint32(0) != _fatMagic) return null;
+    final count = data.getUint32(4);
+    final entries = ByteData.sublistView(handle.readSync(count * 20));
+    for (var i = 0; i < count; i++) {
+      final base = i * 20;
+      if (entries.getUint32(base) != _cpuTypeArm64) continue;
+      final offset = entries.getUint32(base + 8);
+      final size = entries.getUint32(base + 12);
+      handle.setPositionSync(offset);
+      dir.createSync(recursive: true);
+      final slice = p.join(dir.path, '$index-${p.basename(path)}');
+      File(slice).writeAsBytesSync(handle.readSync(size));
+      return slice;
+    }
+    return null;
+  } finally {
+    handle.closeSync();
+  }
 }
 
 bool _isAppleCompilerInvocation(List<String> arguments) {

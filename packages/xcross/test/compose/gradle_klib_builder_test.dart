@@ -30,6 +30,20 @@ void main() {
           'UIKit.klib',
         ),
       )..createSync(recursive: true);
+      final foreignPlatformKlib = Directory(
+        p.join(
+          fixture.root,
+          'konan',
+          'kotlin-native-prebuilt-windows-x86_64-2.4.0',
+          'klib',
+          'platform',
+          'ios_arm64',
+          'org.jetbrains.kotlin.native.platform.UIKit',
+        ),
+      )..createSync(recursive: true);
+      File(
+        p.join(foreignPlatformKlib.path, 'default', 'manifest'),
+      ).createSync(recursive: true);
       final prefixConfusion = Directory('${fixture.kotlinHome}_other')
         ..createSync();
       final siblingKlib = Directory(
@@ -51,12 +65,18 @@ void main() {
                 final source = initScript.readAsStringSync();
                 expect(source, contains('if (name != "b") return@allprojects'));
                 expect(source, contains('tasks.register("dumpIosDeps")'));
+                // Compose resources are refreshed in the same build, but only
+                // where the project has the tasks.
+                expect(source, contains('"iosArm64ProcessResources"'));
+                expect(source, contains('"iosArm64AggregateResources"'));
+                expect(source, contains('project.tasks.findByName(it)'));
                 expect(source, contains('System.getenv("XCROSS_DEPS_OUT")'));
                 File(environment!['XCROSS_DEPS_OUT']!).writeAsStringSync(
                   [
                     p.join(externalKlib.path, '..', 'compose.klib'),
                     externalKlib.path,
                     platformKlib.path,
+                    foreignPlatformKlib.path,
                     siblingKlib.path,
                     p.join(fixture.root, 'missing.klib'),
                     p.join(fixture.root, 'not-klib.jar'),
@@ -68,31 +88,149 @@ void main() {
 
       expect(result.moduleKlibPath, fixture.moduleKlibPath);
       expect(result.dependencies, [normalizedExternal, siblingKlib.path]);
-      expect(calls, hasLength(2));
-      expect(calls.first.executable, p.join(fixture.root, 'gradlew'));
-      expect(calls.first.arguments, [
-        ':a:b:compileKotlinIosArm64',
-        '-Pkotlin.native.enableKlibsCrossCompilation=true',
-        '--no-daemon',
-        '--no-configuration-cache',
-        '--console=plain',
-      ]);
-      expect(calls[1].arguments, [
+      expect(calls, hasLength(1));
+      expect(calls.single.executable, p.join(fixture.root, 'gradlew'));
+      expect(calls.single.arguments, [
         ':a:b:dumpIosDeps',
+        '-Pkotlin.native.enableKlibsCrossCompilation=true',
+        '-Pxcross.depsOut=${p.join(p.dirname(calls.single.initScriptPath), 'iosDeps.txt')}',
         '--init-script',
-        calls[1].initScriptPath,
-        '--no-daemon',
+        calls.single.initScriptPath,
         '--no-configuration-cache',
         '--console=plain',
       ]);
-      expect(
-        calls.every((call) => call.workingDirectory == fixture.root),
-        isTrue,
-      );
-      expect(File(calls[1].initScriptPath).existsSync(), isFalse);
-      expect(File(calls[1].depsOutPath).existsSync(), isFalse);
+      expect(calls.single.workingDirectory, fixture.root);
+      expect(File(calls.single.initScriptPath).existsSync(), isFalse);
+      expect(File(calls.single.depsOutPath).existsSync(), isFalse);
     },
   );
+
+  test(
+    'keeps project klib directories and drops everything that is not a library',
+    () async {
+      // Regression: `api(project(":core"))` resolves to an extension-less klib
+      // *directory* (…/klib/core). Filtering dependencies on a ".klib" suffix
+      // dropped it, so the link ran without the module's own siblings and the
+      // compiler reported unrelated internal errors (IrCompositeImpl in
+      // EnumClassLowering, then "no function X in package Y" from ObjC export).
+      final fixture =
+          _Fixture.create(moduleName: 'app:shared', host: ComposeHost.linuxX64)
+            ..createWrapper()
+            ..createModuleKlib();
+      // Verified against a real `api(project(":core"))` build: Gradle hands the
+      // compilation an extension-less *directory* whose `default/manifest` is
+      // what identifies it as a library.
+      final projectKlib = _unpackedKlib(
+        p.join(
+          fixture.root,
+          'core',
+          'build',
+          'classes',
+          'kotlin',
+          'iosArm64',
+          'main',
+          'klib',
+          'core',
+        ),
+      );
+      // On the compile classpath too, and not a library: must not be passed.
+      final compilerJar = File(
+        p.join(
+          fixture.kotlinHome,
+          'konan',
+          'lib',
+          'kotlin-native-compiler-embeddable.jar',
+        ),
+      )..createSync(recursive: true);
+      // Any other directory on the classpath is not a library either, and
+      // naming the compiler jar alone would keep letting these through.
+      final resourcesDir = Directory(
+        p.join(fixture.root, 'core', 'build', 'processedResources'),
+      )..createSync(recursive: true);
+      final externalKlib = Directory(
+        p.join(fixture.root, 'external', 'compose.klib'),
+      )..createSync(recursive: true);
+
+      addTearDown(fixture.dispose);
+
+      final result = await GradleKlibBuilder.withSeams(
+        runChecked:
+            (executable, arguments, {workingDirectory, environment}) async {
+              if (arguments.contains(':app:shared:dumpIosDeps')) {
+                File(environment!['XCROSS_DEPS_OUT']!).writeAsStringSync(
+                  [
+                    projectKlib.path,
+                    compilerJar.path,
+                    resourcesDir.path,
+                    externalKlib.path,
+                  ].join('\n'),
+                );
+              }
+            },
+      ).build(project: fixture.project, toolchain: fixture.toolchain);
+
+      expect(result.dependencies, [
+        p.normalize(projectKlib.path),
+        p.normalize(externalKlib.path),
+      ]);
+    },
+  );
+
+  // Modelled on a real `:shared:dumpIosDeps` dump (Kotlin 2.4.0, Compose
+  // Multiplatform, one `api(project(":core"))`): 218 entries, of which 178 were
+  // extension-less Konan platform directories, 39 were packed `.klib` files from
+  // Maven, and exactly one was the project's own klib directory.
+  test('handles the shape a real dependency dump has', () async {
+    final fixture =
+        _Fixture.create(moduleName: 'shared', host: ComposeHost.linuxX64)
+          ..createWrapper()
+          ..createModuleKlib();
+    addTearDown(fixture.dispose);
+
+    // Konan's own libraries are unpacked directories without a `.klib` suffix,
+    // and are dropped for being inside the toolchain, not for their shape.
+    final platform = [
+      for (final name in [
+        'stdlib',
+        'org.jetbrains.kotlin.native.platform.UIKit',
+      ])
+        _unpackedKlib(p.join(fixture.kotlinHome, 'klib', name)).path,
+    ];
+    // Maven dependencies arrive as packed files.
+    final packed = [
+      for (final name in ['runtime-iosArm64Main-1.9.0.klib', 'annotation.klib'])
+        (File(p.join(fixture.root, 'm2', name))
+              ..createSync(recursive: true)
+              ..writeAsStringSync('packed'))
+            .path,
+    ];
+    final projectKlib = _unpackedKlib(
+      p.join(
+        fixture.root,
+        'core',
+        'build',
+        'classes',
+        'kotlin',
+        'iosArm64',
+        'main',
+        'klib',
+        'core',
+      ),
+    ).path;
+
+    final result = await GradleKlibBuilder.withSeams(
+      runChecked:
+          (executable, arguments, {workingDirectory, environment}) async {
+            if (arguments.contains(':shared:dumpIosDeps')) {
+              File(environment!['XCROSS_DEPS_OUT']!).writeAsStringSync(
+                [...platform, ...packed, projectKlib].join('\n'),
+              );
+            }
+          },
+    ).build(project: fixture.project, toolchain: fixture.toolchain);
+
+    expect(result.dependencies, [...packed, projectKlib]);
+  });
 
   test('uses system Gradle when no wrapper exists', () async {
     final fixture = _Fixture.create(
@@ -388,6 +526,17 @@ final class _Fixture {
   Future<void> dispose() async {
     if (temp.existsSync()) await temp.delete(recursive: true);
   }
+}
+
+/// Creates an unpacked KLIB at [path], the shape Gradle produces for a project
+/// dependency: a directory whose `default/manifest` is what identifies it as a
+/// library, since the directory name carries no `.klib` suffix.
+Directory _unpackedKlib(String path) {
+  final directory = Directory(path)..createSync(recursive: true);
+  File(p.join(path, 'default', 'manifest'))
+    ..parent.createSync(recursive: true)
+    ..writeAsStringSync('unique_name=test\n');
+  return directory;
 }
 
 final class _Call {

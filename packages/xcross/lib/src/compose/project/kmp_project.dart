@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cli_kit/cli_kit.dart';
 import 'package:path/path.dart' as p;
 import 'package:xcross/src/compose/project/ios_app_config.dart';
 import 'package:xcross/src/errors.dart';
@@ -15,6 +16,7 @@ final class KmpProject {
     required this.entryKind,
     required this.bundleId,
     required this.appName,
+    this.isStaticFramework = false,
     this.entryClass,
     this.entrySelector,
     this.swiftAppDir,
@@ -28,6 +30,12 @@ final class KmpProject {
   final String moduleName;
   final String baseName;
   final KmpEntryKind entryKind;
+
+  /// `binaries.framework { isStatic = true }` in the module's build script.
+  /// The framework link must pass `-Xstatic-framework`, otherwise Kotlin/Native
+  /// produces a dynamic library and the link then requires every ObjC
+  /// dependency of the module (Firebase, system libraries) to be resolvable.
+  final bool isStaticFramework;
   final String bundleId;
   final String appName;
   final String? entryClass;
@@ -91,6 +99,7 @@ final class _KmpProjectDetector {
           module.gradleId,
           module.diskPath,
           _extractBaseName(content) ?? _capitalize(module.leaf),
+          isStaticFramework: _extractIsStaticFramework(content),
         ),
       );
     }
@@ -111,8 +120,17 @@ final class _KmpProjectDetector {
       moduleName: chosen.moduleName,
       baseName: chosen.baseName,
       entryKind: entry.kind,
-      bundleId: bundleIdOverride ?? iosConfig?.bundleId ?? defaults.bundleId,
-      appName: appNameOverride ?? iosConfig?.productName ?? defaults.appName,
+      isStaticFramework: chosen.isStaticFramework,
+      // An xcconfig that sets only some keys (the bundle id often lives in
+      // the Xcode project instead) must not produce an empty identity.
+      bundleId:
+          bundleIdOverride ??
+          _nonEmpty(iosConfig?.bundleId) ??
+          defaults.bundleId,
+      appName:
+          appNameOverride ??
+          _nonEmpty(iosConfig?.productName) ??
+          defaults.appName,
       entryClass: entry.entryClass,
       entrySelector: entry.entrySelector,
       swiftAppDir: entry.swiftAppDir,
@@ -131,10 +149,16 @@ final class _ModuleSpec {
 }
 
 final class _Candidate {
-  const _Candidate(this.moduleName, this.modulePath, this.baseName);
+  const _Candidate(
+    this.moduleName,
+    this.modulePath,
+    this.baseName, {
+    this.isStaticFramework = false,
+  });
   final String moduleName;
   final String modulePath;
   final String baseName;
+  final bool isStaticFramework;
 }
 
 final class _EntryResult {
@@ -201,6 +225,103 @@ bool _hasFrameworkBlock(String content) =>
 
 String? _extractBaseName(String content) =>
     RegExp(r'baseName\s*=\s*"([^"]+)"').firstMatch(content)?.group(1);
+
+/// Whether the module's framework is declared static.
+///
+/// Scoped to the `binaries.framework { … }` block rather than matched across
+/// the whole script, because `isStatic` is not unique to it: an `xcframework`
+/// block, a second target's framework, or a commented-out line would otherwise
+/// all turn it on. Getting this wrong is not symmetric - a false positive stages
+/// an app with no framework embedded at all, which only fails once the app is
+/// launched on a device.
+///
+/// Both assignment styles Gradle accepts are recognised (`isStatic = true` in
+/// Kotlin DSL, `isStatic.set(true)` via the property API).
+bool _extractIsStaticFramework(String content) {
+  for (final block in _frameworkBlocks(_stripComments(content))) {
+    if (RegExp(
+      r'isStatic\s*(?:=\s*true\b|\.set\s*\(\s*true\s*\))',
+    ).hasMatch(block)) {
+      return true;
+    }
+    final computed = RegExp(
+      r'isStatic\s*(?:=\s*(?!true\b|false\b)|\.set\s*\(\s*(?!true\b|false\b))',
+    ).hasMatch(block);
+    if (computed) {
+      Log.logWarn(
+        'isStatic in binaries.framework is not a literal true/false, so xcross '
+        'treats the framework as dynamic. Use a literal value if it is static.',
+      );
+    }
+  }
+  return false;
+}
+
+/// [content] with `//` and `/* */` comments removed, leaving string literals
+/// intact.
+String _stripComments(String content) {
+  final out = StringBuffer();
+  var i = 0;
+  while (i < content.length) {
+    final char = content[i];
+    final next = i + 1 < content.length ? content[i + 1] : '';
+    if (char == '"') {
+      final end = _stringEnd(content, i);
+      out.write(content.substring(i, end));
+      i = end;
+    } else if (char == '/' && next == '/') {
+      final end = content.indexOf('\n', i);
+      i = end < 0 ? content.length : end;
+    } else if (char == '/' && next == '*') {
+      final end = content.indexOf('*/', i + 2);
+      i = end < 0 ? content.length : end + 2;
+      out.write(' ');
+    } else {
+      out.write(char);
+      i++;
+    }
+  }
+  return out.toString();
+}
+
+int _stringEnd(String content, int start) {
+  if (content.startsWith('"""', start)) {
+    final end = content.indexOf('"""', start + 3);
+    return end < 0 ? content.length : end + 3;
+  }
+  for (var i = start + 1; i < content.length; i++) {
+    if (content[i] == r'\') {
+      i++;
+    } else if (content[i] == '"' || content[i] == '\n') {
+      return i + 1;
+    }
+  }
+  return content.length;
+}
+
+/// The body of every `binaries.framework { … }` block, brace-matched.
+///
+/// Returns null when the block is absent or its braces do not close, so a script
+/// this cannot read is treated as "not static", the safe default.
+Iterable<String> _frameworkBlocks(String content) sync* {
+  final starts = RegExp(
+    r'binaries\.framework\s*(?:\([^)]*\)\s*)?\{',
+  ).allMatches(content);
+  for (final start in starts) {
+    var depth = 0;
+    for (var i = start.end - 1; i < content.length; i++) {
+      final char = content[i];
+      if (char == '{') depth++;
+      if (char == '}') {
+        depth--;
+        if (depth == 0) {
+          yield content.substring(start.end, i);
+          break;
+        }
+      }
+    }
+  }
+}
 
 String _capitalize(String value) =>
     value.isEmpty ? value : value[0].toUpperCase() + value.substring(1);
@@ -344,3 +465,6 @@ _Identity _defaultIdentity(String root) {
     appName,
   );
 }
+
+String? _nonEmpty(String? value) =>
+    value == null || value.isEmpty ? null : value;
