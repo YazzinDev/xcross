@@ -4924,7 +4924,7 @@ let package = Package(
       final buildDir = p.join(tmp.path, 'arm64-apple-ios', 'debug');
       final headers = {
         for (final target in [
-          'Aux',
+          'Auxiliary',
           'FlutterPluginsGenerated',
           'InternalSwiftTarget',
           'example_plugin',
@@ -4946,10 +4946,10 @@ let package = Package(
               },
           },
           'targetDependencyMap': {
-            'FlutterPluginsGenerated': ['example_plugin', 'Aux'],
+            'FlutterPluginsGenerated': ['example_plugin', 'Auxiliary'],
             'example_plugin': ['InternalSwiftTarget'],
             'InternalSwiftTarget': <String>[],
-            'Aux': <String>[],
+            'Auxiliary': <String>[],
           },
         }),
       );
@@ -4958,7 +4958,7 @@ let package = Package(
         candidates: headers.keys.toSet(),
       );
       expect(planned, [
-        'Aux',
+        'Auxiliary',
         'FlutterPluginsGenerated',
         'InternalSwiftTarget',
         'example_plugin',
@@ -4968,7 +4968,7 @@ let package = Package(
           buildDir,
           planned,
         ),
-        ['Aux', 'InternalSwiftTarget', 'example_plugin'],
+        ['Auxiliary', 'InternalSwiftTarget', 'example_plugin'],
       );
       final events = <String>[];
       await GeneratedPluginsPackage.buildWithInteropRecovery(
@@ -4988,7 +4988,7 @@ let package = Package(
         },
       );
       expect(events, [
-        'target:Aux',
+        'target:Auxiliary',
         'target:InternalSwiftTarget',
         'target:example_plugin',
         'build',

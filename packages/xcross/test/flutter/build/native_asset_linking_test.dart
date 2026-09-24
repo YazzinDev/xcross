@@ -108,10 +108,9 @@ void main() {
       isEmpty,
     );
     _writeMachO(plugin, '_optional', undefined: true, ordinal: 0xfe);
-    expect(
-      await nativeFrameworksRequiredByPlugins([framework], [plugin]),
-      [framework],
-    );
+    expect(await nativeFrameworksRequiredByPlugins([framework], [plugin]), [
+      framework,
+    ]);
   });
 
   test(

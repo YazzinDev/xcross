@@ -21,7 +21,9 @@ void main() {
     // Accepts the connection, then answers nothing at all.
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));
-    server.listen((request) {/* deliberately never responds */});
+    server.listen((request) {
+      /* deliberately never responds */
+    });
 
     final started = Stopwatch()..start();
     await expectLater(

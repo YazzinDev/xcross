@@ -142,12 +142,13 @@ void main() {
 
     test('retries a transient failure SwiftPM reported on stdout', () {
       final text = GeneratedPluginsPackage.resolveDiagnostics(
-        const CapturedProcess(1, 'error: Recv failure: Connection was reset', ''),
+        const CapturedProcess(
+          1,
+          'error: Recv failure: Connection was reset',
+          '',
+        ),
       );
-      expect(
-        GeneratedPluginsPackage.isTransientNetworkFailure(text),
-        isTrue,
-      );
+      expect(GeneratedPluginsPackage.isTransientNetworkFailure(text), isTrue);
     });
 
     test('omits an empty stream instead of leaving a blank line', () {
@@ -172,30 +173,32 @@ void main() {
       expect(recovered, isTrue);
     });
 
-    test('does not run a resolve again after we killed it for timing out',
-        () async {
-      // Re-running waits out the same stall, which is how the Windows job
-      // kept burning to the job limit even once the timeout fired.
-      var resolves = 0;
-      var recovered = false;
-      await expectLater(
-        GeneratedPluginsPackage.resolveWithFinalBinaryRecovery(
-          resolve: () {
-            resolves++;
-            throw StateError(
-              'command timed out after 1800s and was killed: swift-package',
-            );
-          },
-          recover: () async {
-            recovered = true;
-            return true;
-          },
-        ),
-        throwsA(isA<StateError>()),
-      );
-      expect(resolves, 1);
-      expect(recovered, isFalse);
-    });
+    test(
+      'does not run a resolve again after we killed it for timing out',
+      () async {
+        // Re-running waits out the same stall, which is how the Windows job
+        // kept burning to the job limit even once the timeout fired.
+        var resolves = 0;
+        var recovered = false;
+        await expectLater(
+          GeneratedPluginsPackage.resolveWithFinalBinaryRecovery(
+            resolve: () {
+              resolves++;
+              throw StateError(
+                'command timed out after 1800s and was killed: swift-package',
+              );
+            },
+            recover: () async {
+              recovered = true;
+              return true;
+            },
+          ),
+          throwsA(isA<StateError>()),
+        );
+        expect(resolves, 1);
+        expect(recovered, isFalse);
+      },
+    );
 
     test('treats the resolve-specific timeout message as terminal too', () {
       expect(

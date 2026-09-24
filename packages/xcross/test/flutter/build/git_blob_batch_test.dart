@@ -64,14 +64,15 @@ void main() {
     // write-then-read order deadlocked here every time.
     final expected = await repositoryWithBlobs(count: 64, size: 64 * 1024);
 
-    final blobs = await GeneratedPluginsPackage.readGitBlobs(
-      p.join(temp.path, 'repo'),
-      expected.keys.toSet(),
-      git,
-    ).timeout(
-      const Duration(minutes: 2),
-      onTimeout: () => fail('readGitBlobs deadlocked on the stdout pipe'),
-    );
+    final blobs =
+        await GeneratedPluginsPackage.readGitBlobs(
+          p.join(temp.path, 'repo'),
+          expected.keys.toSet(),
+          git,
+        ).timeout(
+          const Duration(minutes: 2),
+          onTimeout: () => fail('readGitBlobs deadlocked on the stdout pipe'),
+        );
 
     expect(blobs.keys.toSet(), expected.keys.toSet());
     for (final entry in expected.entries) {

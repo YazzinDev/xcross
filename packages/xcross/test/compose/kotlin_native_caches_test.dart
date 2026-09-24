@@ -144,107 +144,115 @@ void main() {
       expect(after['org.example:lib-b'], isNot(before['org.example:lib-b']));
     });
 
-    test('builds each cache once, then only the module per-file cache', () async {
-      final plan = fixture.plan();
-      final calls = <List<String>>[];
+    test(
+      'builds each cache once, then only the module per-file cache',
+      () async {
+        final plan = fixture.plan();
+        final calls = <List<String>>[];
 
-      Future<void> build() => const KotlinNativeCaches(jobs: 2).build(
-        plan: plan,
-        prepared: fixture.prepared,
-        klib: fixture.klib,
-        workingDirectory: fixture.root,
-        run:
-            (
-              executable,
-              arguments, {
-              required workingDirectory,
-              required environment,
-            }) async {
-              expect(executable, fixture.prepared.javaExecutable);
-              expect(environment, fixture.prepared.environment);
-              expect(workingDirectory, fixture.root);
-              calls.add(arguments);
-              _produceCache(arguments, plan);
-            },
-      );
+        Future<void> build() => const KotlinNativeCaches(jobs: 2).build(
+          plan: plan,
+          prepared: fixture.prepared,
+          klib: fixture.klib,
+          workingDirectory: fixture.root,
+          run:
+              (
+                executable,
+                arguments, {
+                required workingDirectory,
+                required environment,
+              }) async {
+                expect(executable, fixture.prepared.javaExecutable);
+                expect(environment, fixture.prepared.environment);
+                expect(workingDirectory, fixture.root);
+                calls.add(arguments);
+                _produceCache(arguments, plan);
+              },
+        );
 
-      await build();
-      expect(calls, hasLength(6), reason: 'five libraries and the module');
+        await build();
+        expect(calls, hasLength(6), reason: 'five libraries and the module');
 
-      final built = [
-        for (final call in calls.take(5))
-          call.firstWhere((a) => a.startsWith('-Xadd-cache=')).substring(12),
-      ];
-      final order = plan.libraries.map((node) => node.path).toList();
-      for (final node in plan.libraries) {
-        for (final dependency in node.dependencies) {
-          final dependencyPath = plan.libraries
-              .firstWhere((other) => other.uniqueName == dependency)
-              .path;
-          expect(
-            built.indexOf(dependencyPath),
-            lessThan(built.indexOf(node.path)),
-          );
+        final built = [
+          for (final call in calls.take(5))
+            call.firstWhere((a) => a.startsWith('-Xadd-cache=')).substring(12),
+        ];
+        final order = plan.libraries.map((node) => node.path).toList();
+        for (final node in plan.libraries) {
+          for (final dependency in node.dependencies) {
+            final dependencyPath = plan.libraries
+                .firstWhere((other) => other.uniqueName == dependency)
+                .path;
+            expect(
+              built.indexOf(dependencyPath),
+              lessThan(built.indexOf(node.path)),
+            );
+          }
         }
-      }
-      expect(built.toSet(), order.toSet());
+        expect(built.toSet(), order.toSet());
 
-      final libB = calls.firstWhere(
-        (call) => call.contains('-Xadd-cache=${fixture.libB}'),
-      );
-      expect(libB, containsAllInOrder(['-p', 'static_cache']));
-      expect(libB, contains('-Xbinary=enableDebugTransparentStepping=false'));
-      expect(libB, containsAllInOrder(['-target', 'ios_arm64']));
-      expect(
-        libB,
-        contains(
-          '-Xoverride-konan-properties=${fixture.prepared.konanPropertyOverrides}',
-        ),
-      );
-      // Its project dependency is passed as a library and as a cache; the
-      // distribution's own libraries only as caches.
-      expect(libB, containsAllInOrder(['-library', fixture.libA]));
-      expect(libB.where((a) => a == '-library'), hasLength(1));
-      final byName = {for (final node in plan.libraries) node.uniqueName: node};
-      for (final name in [
-        'stdlib',
-        'org.jetbrains.kotlin.native.platform.Foundation',
-        'org.example:lib-a',
-      ]) {
+        final libB = calls.firstWhere(
+          (call) => call.contains('-Xadd-cache=${fixture.libB}'),
+        );
+        expect(libB, containsAllInOrder(['-p', 'static_cache']));
+        expect(libB, contains('-Xbinary=enableDebugTransparentStepping=false'));
+        expect(libB, containsAllInOrder(['-target', 'ios_arm64']));
         expect(
           libB,
           contains(
-            '-Xcached-library=${byName[name]!.path},${byName[name]!.cachePath}',
+            '-Xoverride-konan-properties=${fixture.prepared.konanPropertyOverrides}',
           ),
         );
-      }
+        // Its project dependency is passed as a library and as a cache; the
+        // distribution's own libraries only as caches.
+        expect(libB, containsAllInOrder(['-library', fixture.libA]));
+        expect(libB.where((a) => a == '-library'), hasLength(1));
+        final byName = {
+          for (final node in plan.libraries) node.uniqueName: node,
+        };
+        for (final name in [
+          'stdlib',
+          'org.jetbrains.kotlin.native.platform.Foundation',
+          'org.example:lib-a',
+        ]) {
+          expect(
+            libB,
+            contains(
+              '-Xcached-library=${byName[name]!.path},${byName[name]!.cachePath}',
+            ),
+          );
+        }
 
-      final module = calls.last;
-      expect(module, contains('-Xadd-cache=${fixture.moduleKlib}'));
-      expect(module, contains('-Xmake-per-file-cache'));
-      expect(module, contains('-Xcache-directory=${plan.moduleCacheRoot}'));
-      expect(
-        module,
-        containsAllInOrder([
-          '-library',
-          fixture.libA,
-          '-library',
-          fixture.libB,
-        ]),
-      );
-      for (final node in plan.libraries) {
-        expect(module, contains('-Xcache-directory=${node.cacheRoot}'));
+        final module = calls.last;
+        expect(module, contains('-Xadd-cache=${fixture.moduleKlib}'));
+        expect(module, contains('-Xmake-per-file-cache'));
+        expect(module, contains('-Xcache-directory=${plan.moduleCacheRoot}'));
         expect(
-          File(p.join(node.cacheRoot, '.xcross-complete')).existsSync(),
-          isTrue,
+          module,
+          containsAllInOrder([
+            '-library',
+            fixture.libA,
+            '-library',
+            fixture.libB,
+          ]),
         );
-      }
+        for (final node in plan.libraries) {
+          expect(module, contains('-Xcache-directory=${node.cacheRoot}'));
+          expect(
+            File(p.join(node.cacheRoot, '.xcross-complete')).existsSync(),
+            isTrue,
+          );
+        }
 
-      calls.clear();
-      await build();
-      expect(calls, hasLength(1));
-      expect(calls.single, contains('-Xmake-per-file-cache'));
-    });
+        calls.clear();
+        await build();
+        expect(calls, hasLength(1));
+        expect(calls.single, contains('-Xmake-per-file-cache'));
+      },
+      skip: Platform.isWindows
+          ? 'Windows cannot name a cache for a klib whose unique_name has a colon'
+          : false,
+    );
 
     test('says how to opt out when a cache is not produced', () async {
       final plan = fixture.plan();
@@ -355,6 +363,9 @@ void main() {
           isEmpty,
         );
       },
+      skip: Platform.isWindows
+          ? 'Windows cannot name a cache for a klib whose unique_name has a colon'
+          : false,
     );
   });
 }

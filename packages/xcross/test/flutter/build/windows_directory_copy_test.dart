@@ -97,7 +97,10 @@ void main() {
       expect(p.isWithin(scratch.path, alias), isTrue);
       expect(
         await Directory(alias).resolveSymbolicLinks(),
-        p.normalize(source),
+        await Directory(extendedSource).resolveSymbolicLinks().then(
+          (resolved) =>
+              resolved.startsWith(r'\\?\') ? resolved.substring(4) : resolved,
+        ),
       );
       expect(File(p.join(alias, 'Info.plist')).readAsStringSync(), 'framework');
       expect(
