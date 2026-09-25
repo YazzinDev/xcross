@@ -9,10 +9,15 @@ Future<ProcessResult> runUpdateProcess(
   String? workingDirectory,
 }) async {
   try {
+    final lowerExecutable = executable.toLowerCase();
+    final runInShell =
+        Platform.isWindows &&
+        (lowerExecutable.endsWith('.bat') || lowerExecutable.endsWith('.cmd'));
     final process = await ProcessRunner.start(
       executable,
       arguments,
       workingDirectory: workingDirectory,
+      runInShell: runInShell,
     );
     final stdoutBuffer = StringBuffer();
     final stderrBuffer = StringBuffer();
