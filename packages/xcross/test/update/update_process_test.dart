@@ -116,23 +116,59 @@ void main() {
     },
   );
 
+  for (final extension in ['bat', 'cmd']) {
+    test(
+      'preserves encoded ref arguments through Windows .$extension',
+      () async {
+        final temp = await Directory.systemTemp.createTemp(
+          'update process batch test-',
+        );
+        addTearDown(() async {
+          if (temp.existsSync()) await temp.delete(recursive: true);
+        });
+        final script = File(p.join(temp.path, 'emit.$extension'))
+          ..writeAsStringSync('@echo off\r\necho %*\r\n');
+
+        const encodedBranch = 'feature%2Fa%2Cb%3Dc';
+        final result = await runUpdateProcess(
+          script.path,
+          [encodedBranch],
+          environment: {'2Fa': 'EXPANDED'},
+        );
+
+        expect(result.exitCode, 0);
+        expect((result.stdout as String).trim(), encodedBranch);
+      },
+      skip: !Platform.isWindows,
+    );
+  }
+
   test(
-    'starts Windows batch executables through the system shell',
+    'preserves the built version through a Windows Dart batch launcher',
     () async {
       final temp = await Directory.systemTemp.createTemp(
-        'update process batch test-',
+        'update-process-version-test-',
       );
       addTearDown(() async {
         if (temp.existsSync()) await temp.delete(recursive: true);
       });
-      final script = File(p.join(temp.path, 'emit.bat'))
-        ..writeAsStringSync('@echo off\r\necho %*\r\n');
+      final script = File(p.join(temp.path, 'version.dart'))
+        ..writeAsStringSync(
+          "void main() => print(Uri.decodeComponent(const String.fromEnvironment('XCROSS_VERSION')));\n",
+        );
+      final dartBatch = File(p.join(temp.path, 'dart.bat'))
+        ..writeAsStringSync(
+          '@echo off\r\n"${Platform.resolvedExecutable}" %*\r\n',
+        );
 
-      const encodedBranch = 'feature%2Fa%2Cb%3Dc';
-      final result = await runUpdateProcess(script.path, [encodedBranch]);
+      final result = await runUpdateProcess(
+        dartBatch.path,
+        ['run', '-DXCROSS_VERSION=feature%2Fa%2Cb%3Dc', script.path],
+        environment: {'2Fa': 'EXPANDED'},
+      );
 
-      expect(result.exitCode, 0);
-      expect((result.stdout as String).trim(), encodedBranch);
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      expect((result.stdout as String).trim(), endsWith('feature/a,b=c'));
     },
     skip: !Platform.isWindows,
   );

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:cli_kit/cli_kit.dart';
 import 'package:path/path.dart' as p;
+import 'package:posix/posix.dart' as posix;
 import 'package:xcross/src/errors.dart';
 
 Future<String> findDartExecutableOnPath({
@@ -28,7 +29,7 @@ Future<String> findDartExecutableOnPath({
 
 bool _isDartLauncher(String path, {required bool windows}) {
   final name = p.basename(path);
-  if (!windows) return name == 'dart';
+  if (!windows) return name == 'dart' && posix.access(path, posix.X_OK) == 0;
 
   return switch (name.toLowerCase()) {
     'dart.exe' || 'dart.bat' || 'dart.cmd' => true,

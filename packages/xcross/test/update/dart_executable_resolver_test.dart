@@ -63,7 +63,8 @@ void main() {
 
     test('Linux resolves only the exact dart file', () async {
       final bin = _createBinDirectory();
-      File(p.join(bin.path, 'dart')).createSync();
+      final dart = File(p.join(bin.path, 'dart'))..createSync();
+      expect(Process.runSync('chmod', ['755', dart.path]).exitCode, 0);
       File(p.join(bin.path, 'dart.exe')).createSync();
       File(p.join(bin.path, 'dart.bat')).createSync();
 
@@ -77,7 +78,31 @@ void main() {
         p.normalize(p.absolute(result)),
         p.normalize(p.absolute(p.join(bin.path, 'dart'))),
       );
-    });
+    }, skip: Platform.isWindows);
+
+    test(
+      'Linux skips a non-executable dart earlier on PATH',
+      () async {
+        final firstBin = _createBinDirectory();
+        final secondBin = _createBinDirectory();
+        final unusable = File(p.join(firstBin.path, 'dart'))..createSync();
+        final usable = File(p.join(secondBin.path, 'dart'))..createSync();
+        expect(Process.runSync('chmod', ['644', unusable.path]).exitCode, 0);
+        expect(Process.runSync('chmod', ['755', usable.path]).exitCode, 0);
+
+        final result = await findDartExecutableOnPath(
+          windows: false,
+          environment: {'PATH': '${firstBin.path}:${secondBin.path}'},
+          useConfiguration: false,
+        );
+
+        expect(
+          p.normalize(p.absolute(result)),
+          p.normalize(usable.absolute.path),
+        );
+      },
+      skip: Platform.isWindows,
+    );
 
     test('Linux does not resolve Windows-only launcher files', () async {
       final bin = _createBinDirectory();
