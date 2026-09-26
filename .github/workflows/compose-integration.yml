@@ -3,7 +3,8 @@ name: Compose Integration Tests
 on:
   pull_request:
   push:
-  workflow_dispatch:
+    branches:
+      - main
 
 permissions:
   contents: read
