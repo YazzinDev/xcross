@@ -17,6 +17,7 @@ import 'package:xcross/src/flutter/build/ios_engine_cache.dart';
 import 'package:xcross/src/flutter/build/ios_plugins.dart';
 import 'package:xcross/src/flutter/constants.dart';
 import 'package:xcross/src/flutter/errors.dart';
+import 'package:xcross/src/flutter/models/flutter/dart_defines.dart';
 import 'package:xcross/src/flutter/models/pubspec_info.dart';
 import 'package:xcross/src/package_config_resolver.dart';
 
@@ -61,13 +62,6 @@ final class FlutterDebugBundler {
     this.dartDefines = const [],
     this.flavor,
   });
-
-  /// Empty zlib stream: `zlib.compress(b'')` in Python.
-  /// CMF=0x78 FLG=0x9c, empty deflate block (BFINAL=1 BTYPE=0, zero length),
-  /// Adler-32 of empty input = 0x00000001 big-endian.
-  static const _emptyZlibBytes = [
-    0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01, //
-  ];
 
   /// Build `App.framework` inside [outputDir]. Returns the framework path.
   Future<String> build() async {
@@ -281,12 +275,10 @@ final class FlutterDebugBundler {
     '--packages', packageConfig,
     '--output-dill', outputDill,
     // User-supplied dart-defines forwarded as -D<KEY=VALUE>.
-    for (final define in dartDefines) '-D$define',
     // --flavor → FLUTTER_APP_FLAVOR dart-define, unless already set
     // explicitly above (explicit define wins).
-    if (flavor != null &&
-        !dartDefines.any((d) => d.startsWith('FLUTTER_APP_FLAVOR=')))
-      '-DFLUTTER_APP_FLAVOR=$flavor',
+    for (final define in DartDefines.withFlavor(dartDefines, flavor))
+      '-D$define',
     // All three go together: the generated registrant, the flutter library
     // that calls it, and the define naming which library to look in. Passing
     // fewer means the VM never runs the registrant.
@@ -465,9 +457,6 @@ final class FlutterDebugBundler {
     File(
       p.join(assetsDir, 'FontManifest.json'),
     ).writeAsStringSync(jsonEncode(fonts));
-
-    // NOTICES.Z — empty zlib stream (LicensePage handles empty content fine).
-    File(p.join(assetsDir, 'NOTICES.Z')).writeAsBytesSync(_emptyZlibBytes);
   }
 
   Future<Toolchain> _resolveToolchain() async {

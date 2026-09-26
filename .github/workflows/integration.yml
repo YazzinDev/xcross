@@ -343,6 +343,7 @@ jobs:
           grep -Eq 'Format: Mach-O arm64|Arch: aarch64' runner-headers.txt
           llvm-objdump --macho --private-headers "$runner" |
             grep -F '@executable_path/Frameworks'
+          dart run ../../packages/xcross/tool/verify_flutter_notices.dart build/xcross-ios
 
       - name: Inspect Flutter example artifact on Windows
         if: runner.os == 'Windows' && steps.darwin.outputs.available == 'true'
@@ -369,3 +370,28 @@ jobs:
               $commands -notmatch '@executable_path/Frameworks') {
             throw "Missing Frameworks rpath:`n$commands"
           }
+          dart run ../../packages/xcross/tool/verify_flutter_notices.dart build/xcross-ios
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Flutter notices are invalid' }
+
+      - name: Verify notices without native hooks on Linux
+        if: runner.os == 'Linux' && steps.darwin.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter create --platforms=ios --project-name=license_smoke "$RUNNER_TEMP/license-smoke"
+          cd "$RUNNER_TEMP/license-smoke"
+          "$RUNNER_TEMP/xcross-bundle/bin/xcross" flutter build --no-pub --flavor=staging --dart-define=FLUTTER_APP_FLAVOR=explicit
+          dart run "$GITHUB_WORKSPACE/packages/xcross/tool/verify_flutter_notices.dart" build/xcross-ios
+
+      - name: Verify notices without native hooks on Windows
+        if: runner.os == 'Windows' && steps.darwin.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          flutter create --platforms=ios --project-name=license_smoke "$env:RUNNER_TEMP/license-smoke"
+          if ($LASTEXITCODE -ne 0) { throw 'Creating no-hook fixture failed' }
+          Set-Location "$env:RUNNER_TEMP/license-smoke"
+          & "$env:RUNNER_TEMP\xcross-bundle\bin\xcross.exe" flutter build --no-pub --flavor=staging --dart-define=FLUTTER_APP_FLAVOR=explicit
+          if ($LASTEXITCODE -ne 0) { throw 'No-hook fixture build failed' }
+          dart run "$env:GITHUB_WORKSPACE/packages/xcross/tool/verify_flutter_notices.dart" build/xcross-ios
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Flutter notices are invalid' }

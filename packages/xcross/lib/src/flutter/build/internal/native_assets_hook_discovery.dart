@@ -1,15 +1,21 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path/path.dart' as p;
 import 'package:xcross/src/flutter/errors.dart';
+import 'package:xcross/src/package_config_resolver.dart';
 
 /// Whether any package in the resolved package graph has a build hook.
-bool hasNativeAssetsBuildHooks(String projectRoot) {
-  final packageConfig = File(
-    p.join(projectRoot, '.dart_tool', 'package_config.json'),
-  );
-  if (!packageConfig.existsSync()) return false;
+Future<bool> hasNativeAssetsBuildHooks(String projectRoot) async {
+  final String configPath;
+  try {
+    configPath = await PackageConfigResolver.require(projectRoot);
+  } on FormatException catch (error) {
+    throw FlutterBuildError(
+      'Could not read package config from $projectRoot: malformed JSON '
+      '($error). Run `flutter pub get` and retry.',
+    );
+  }
+  final packageConfig = File(configPath);
 
   final Object? json;
   try {

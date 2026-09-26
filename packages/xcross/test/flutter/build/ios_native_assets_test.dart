@@ -158,9 +158,9 @@ void main() {
 {"configVersion":2,"packages":[{"name":"dependency","rootUri":"../../dependency","packageUri":"lib/"}]}
 ''');
 
-      expect(hasNativeAssetsBuildHooks(p.join(tmp.path, 'app')), isTrue);
+      expect(await hasNativeAssetsBuildHooks(p.join(tmp.path, 'app')), isTrue);
       File(p.join(package.path, 'hook', 'build.dart')).deleteSync();
-      expect(hasNativeAssetsBuildHooks(p.join(tmp.path, 'app')), isFalse);
+      expect(await hasNativeAssetsBuildHooks(p.join(tmp.path, 'app')), isFalse);
     } finally {
       await tmp.delete(recursive: true);
     }
@@ -173,8 +173,8 @@ void main() {
         ..createSync(recursive: true);
       File(p.join(dartTool.path, 'package_config.json')).writeAsStringSync('{');
 
-      expect(
-        () => hasNativeAssetsBuildHooks(tmp.path),
+      await expectLater(
+        hasNativeAssetsBuildHooks(tmp.path),
         throwsA(
           isA<FlutterBuildError>().having(
             (error) => error.message,
@@ -183,6 +183,44 @@ void main() {
           ),
         ),
       );
+    } finally {
+      await tmp.delete(recursive: true);
+    }
+  });
+
+  test('detects native hooks from an ancestor workspace config', () async {
+    final tmp = await Directory.systemTemp.createTemp('workspace_hooks-');
+    try {
+      final app = Directory(p.join(tmp.path, 'apps', 'example'))
+        ..createSync(recursive: true);
+      final hook = File(
+        p.join(tmp.path, 'dependency with spaces', 'hook', 'build.dart'),
+      )..createSync(recursive: true);
+      final config = File(p.join(tmp.path, '.dart_tool', 'package_config.json'))
+        ..createSync(recursive: true);
+      config.writeAsStringSync(
+        jsonEncode({
+          'configVersion': 2,
+          'packages': [
+            {
+              'name': 'native_dependency',
+              'rootUri': '../dependency%20with%20spaces/',
+              'packageUri': 'lib/',
+            },
+          ],
+        }),
+      );
+
+      expect(await hasNativeAssetsBuildHooks(app.path), isTrue);
+      hook.deleteSync();
+      expect(await hasNativeAssetsBuildHooks(app.path), isFalse);
+
+      // A local config takes precedence over the ancestor's hook packages.
+      hook.createSync();
+      File(p.join(app.path, '.dart_tool', 'package_config.json'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('{"configVersion":2,"packages":[]}');
+      expect(await hasNativeAssetsBuildHooks(app.path), isFalse);
     } finally {
       await tmp.delete(recursive: true);
     }

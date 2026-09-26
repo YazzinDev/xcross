@@ -6,6 +6,14 @@ import 'package:xcross/src/flutter/errors.dart';
 
 /// Merging of dart-define sources into `KEY=VALUE` strings.
 abstract final class DartDefines {
+  /// Adds the selected flavor while preserving explicit app-flavor overrides.
+  static List<String> withFlavor(List<String> defines, String? flavor) => [
+    ...defines,
+    if (flavor != null &&
+        !defines.any((define) => define.startsWith('FLUTTER_APP_FLAVOR=')))
+      'FLUTTER_APP_FLAVOR=$flavor',
+  ];
+
   /// Merge dart-define sources into ordered `KEY=VALUE` strings.
   ///
   /// ORDER MATTERS: file entries come first and explicit `--dart-define`

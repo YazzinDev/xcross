@@ -6,6 +6,7 @@ import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import 'package:xcross/src/flutter/build/app_extension_builder.dart';
 import 'package:xcross/src/flutter/build/flutter_debug_bundler.dart';
+import 'package:xcross/src/flutter/build/flutter_notice_artifact.dart';
 import 'package:xcross/src/flutter/build/info_plist.dart';
 import 'package:xcross/src/flutter/build/internal/native_asset_linkage.dart';
 import 'package:xcross/src/flutter/build/internal/recursive_directory_copy.dart';
@@ -131,7 +132,13 @@ final class FlutterPacker {
         flutterRoot: flutterRoot,
         deploymentTarget: deploymentTarget,
         entrypoint: options.target,
+        dartDefines: options.dartDefines,
+        flavor: options.flavor,
       ).build(),
+    );
+    copyFlutterNoticeArtifact(
+      sourceFlutterAssetsDirectory: p.dirname(nativeAssets.manifestPath),
+      destinationFlutterAssetsDirectory: p.join(appFramework, 'flutter_assets'),
     );
     await File(
       nativeAssets.manifestPath,
