@@ -124,7 +124,7 @@ final class FlutterPacker {
     final deploymentTarget = IosDeploymentTarget.resolve(projectRoot);
     Log.logTrace('iOS deployment target: ${deploymentTarget.version}');
 
-    await validateIosResourceSources(projectRoot);
+    await validateIosResourceSources(projectRoot, strict: _release);
 
     if (_release) {
       validateReleasePlugins(await PluginDiscovery.discover(projectRoot));
@@ -135,80 +135,83 @@ final class FlutterPacker {
       }
     }
 
-    final appBuild = await _buildAppFramework(
+    return _withAppFramework(
       flutterRoot,
       deploymentTarget: deploymentTarget,
-    );
-    final appFramework = appBuild.framework;
-    final nativeAssets = _release
-        ? IosNativeAssetsBuildResult(
-            manifestPath: p.join(
+      consume: (appBuild) async {
+        final appFramework = appBuild.framework;
+        final nativeAssets = _release
+            ? IosNativeAssetsBuildResult(
+                manifestPath: p.join(
+                  appFramework,
+                  'flutter_assets',
+                  'NativeAssetsManifest.json',
+                ),
+                frameworks: appBuild.nativeFrameworks,
+              )
+            : await Log.logStep(
+                'Building native assets',
+                () => IosNativeAssetsBuilder(
+                  projectRoot: projectRoot,
+                  flutterRoot: flutterRoot,
+                  deploymentTarget: deploymentTarget,
+                  entrypoint: options.target,
+                  dartDefines: options.dartDefines,
+                  flavor: options.flavor,
+                ).build(),
+              );
+        if (!_release) {
+          copyFlutterNoticeArtifact(
+            sourceFlutterAssetsDirectory: p.dirname(nativeAssets.manifestPath),
+            destinationFlutterAssetsDirectory: p.join(
               appFramework,
               'flutter_assets',
-              'NativeAssetsManifest.json',
             ),
-            frameworks: appBuild.nativeFrameworks,
-          )
-        : await Log.logStep(
-            'Building native assets',
-            () => IosNativeAssetsBuilder(
-              projectRoot: projectRoot,
-              flutterRoot: flutterRoot,
-              deploymentTarget: deploymentTarget,
-              entrypoint: options.target,
-              dartDefines: options.dartDefines,
-              flavor: options.flavor,
-            ).build(),
           );
-    if (!_release) {
-      copyFlutterNoticeArtifact(
-        sourceFlutterAssetsDirectory: p.dirname(nativeAssets.manifestPath),
-        destinationFlutterAssetsDirectory: p.join(
-          appFramework,
-          'flutter_assets',
-        ),
-      );
-      await File(nativeAssets.manifestPath).copy(
-        p.join(appFramework, 'flutter_assets', 'NativeAssetsManifest.json'),
-      );
-    }
-    final pluginsBuild = await _buildPlugins(
-      flutterRoot,
-      deploymentTarget: deploymentTarget,
-      verbose: Log.isVerbose,
-    );
-    // Flutter normally opens native assets via the manifest. A SwiftPM dylib
-    // can nevertheless import a symbol from one of those frameworks without
-    // declaring a load command for it. Bridge only that proven dependency at
-    // launch; do not eagerly load every embedded native asset.
-    final requiredNativeFrameworks = await nativeFrameworksRequiredByPlugins(
-      nativeAssets.frameworks,
-      pluginsBuild?.dylibPaths ?? const [],
-    );
-    final runnerResult = await _buildRunnerBinary(
-      flutterRoot,
-      deploymentTarget: deploymentTarget,
-      pluginsLibrary: pluginsBuild?.libraryPath,
-      nativeAssetFrameworks: requiredNativeFrameworks,
-      verbose: Log.isVerbose,
-    );
+          await File(nativeAssets.manifestPath).copy(
+            p.join(appFramework, 'flutter_assets', 'NativeAssetsManifest.json'),
+          );
+        }
+        final pluginsBuild = await _buildPlugins(
+          flutterRoot,
+          deploymentTarget: deploymentTarget,
+          verbose: Log.isVerbose,
+        );
+        // Flutter normally opens native assets via the manifest. A SwiftPM dylib
+        // can nevertheless import a symbol from one of those frameworks without
+        // declaring a load command for it. Bridge only that proven dependency at
+        // launch; do not eagerly load every embedded native asset.
+        final requiredNativeFrameworks =
+            await nativeFrameworksRequiredByPlugins(
+              nativeAssets.frameworks,
+              pluginsBuild?.dylibPaths ?? const [],
+            );
+        final runnerResult = await _buildRunnerBinary(
+          flutterRoot,
+          deploymentTarget: deploymentTarget,
+          pluginsLibrary: pluginsBuild?.libraryPath,
+          nativeAssetFrameworks: requiredNativeFrameworks,
+          verbose: Log.isVerbose,
+        );
 
-    final extensions = await _buildAppExtensions(
-      deploymentTarget: deploymentTarget,
-      flutterXcframework: runnerResult.xcframework,
-      pluginsBuild: pluginsBuild,
-    );
+        final extensions = await _buildAppExtensions(
+          deploymentTarget: deploymentTarget,
+          flutterXcframework: runnerResult.xcframework,
+          pluginsBuild: pluginsBuild,
+        );
 
-    return _assembleAndPersistBundle(
-      appFramework: appFramework,
-      xcframework: runnerResult.xcframework,
-      runnerBinary: runnerResult.runnerBinary,
-      sdkName: runnerResult.sdkName,
-      pluginLibraries: pluginsBuild?.dylibPaths ?? const [],
-      pluginResourceBundles: pluginsBuild?.resourceBundles ?? const [],
-      nativeAssetFrameworks: nativeAssets.frameworks,
-      deploymentTarget: deploymentTarget,
-      extensions: extensions,
+        return _assembleAndPersistBundle(
+          appFramework: appFramework,
+          xcframework: runnerResult.xcframework,
+          runnerBinary: runnerResult.runnerBinary,
+          sdkName: runnerResult.sdkName,
+          pluginLibraries: pluginsBuild?.dylibPaths ?? const [],
+          pluginResourceBundles: pluginsBuild?.resourceBundles ?? const [],
+          nativeAssetFrameworks: nativeAssets.frameworks,
+          deploymentTarget: deploymentTarget,
+          extensions: extensions,
+        );
+      },
     );
   }
 
@@ -311,11 +314,14 @@ final class FlutterPacker {
   }
 
   /// Build `App.framework` with the mode's dedicated compiler pipeline.
-  /// Returns the framework directory path.
-  Future<({String framework, List<String> nativeFrameworks})>
-  _buildAppFramework(
+  /// Keep release intermediates alive until the consumer finishes packaging.
+  Future<T> _withAppFramework<T>(
     String flutterRoot, {
     required IosDeploymentTarget deploymentTarget,
+    required Future<T> Function(
+      ({String framework, List<String> nativeFrameworks}),
+    )
+    consume,
   }) async {
     if (_release) {
       return FlutterReleaseBundler(
@@ -324,7 +330,7 @@ final class FlutterPacker {
         outputDir: p.join(projectRoot, 'build', 'xcross-flutter-release'),
         deploymentTarget: deploymentTarget,
         options: options,
-      ).build();
+      ).build(consume);
     }
     final assembleOut = p.join(projectRoot, 'build', 'xcross-flutter-debug');
     final assembleDir = Directory(assembleOut);
@@ -340,7 +346,7 @@ final class FlutterPacker {
       dartDefines: options.dartDefines,
       flavor: options.flavor,
     ).build();
-    return (framework: framework, nativeFrameworks: const <String>[]);
+    return consume((framework: framework, nativeFrameworks: const <String>[]));
   }
 
   /// Discover the project's iOS plugins and build the aggregate Swift
@@ -611,7 +617,7 @@ final class FlutterPacker {
       projectRoot: projectRoot,
       bundleDir: bundleDir,
       strict: _release,
-      compileSources: true,
+      compileSources: _release,
       deploymentTarget: deploymentTarget.version,
     );
     await _writeInfoPlist(
@@ -692,7 +698,11 @@ final class FlutterPacker {
     if (assetPlist != null) {
       plistXml = InfoPlist.mergeAssetMetadata(plistXml, assetPlist);
     }
-    InfoPlist.validateStoryboardReferences(plistXml, bundleDir);
+    if (_release) {
+      InfoPlist.validateStoryboardReferences(plistXml, bundleDir);
+    } else {
+      plistXml = InfoPlist.stripUnsatisfiableStoryboards(plistXml, bundleDir);
+    }
     plistXml = InfoPlist.applySceneLifecycle(plistXml);
     plistXml = InfoPlist.normalizeObjCClassNames(plistXml);
     // Carry the app's own App Groups forward so the sign/install stage can

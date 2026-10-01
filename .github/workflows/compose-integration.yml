@@ -272,8 +272,10 @@ jobs:
           }
 
           dart pub get
+          if ($LASTEXITCODE -ne 0) { throw 'Resolving xcross dependencies failed' }
           Push-Location packages/xcross
           dart run tool/build_xcross.dart
+          if ($LASTEXITCODE -ne 0) { throw 'Building xcross failed' }
           Pop-Location
           Copy-Item -Recurse `
             packages/xcross/build/cli/windows_x64/bundle `

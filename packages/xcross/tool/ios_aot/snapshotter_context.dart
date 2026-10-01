@@ -8,6 +8,8 @@ import 'package:path/path.dart' as p;
 import 'package:xcross/src/flutter/build/internal/build_lock.dart';
 import 'package:xcross/src/update/internal/archive_entry_path.dart';
 
+import 'snapshotter_source_archive.dart';
+
 String snapshotterHost([Abi? abi]) => switch (abi ?? Abi.current()) {
   Abi.windowsX64 => 'windows-x64',
   Abi.linuxX64 => 'linux-x64',
@@ -141,6 +143,8 @@ final class SnapshotterContext {
   Future<String> download(String name) async {
     final downloads = pins['downloads'] as Map<String, dynamic>;
     final spec = downloads[name] as Map<String, dynamic>;
+    final sourceArchive = spec.containsKey('tarContentsSha256');
+    final expected = spec[sourceArchive ? 'tarContentsSha256' : 'sha256'];
     final target = p.join(cache, 'downloads', name);
     await assertPrivate(target);
     if (!File(target).existsSync()) {
@@ -165,7 +169,7 @@ final class SnapshotterContext {
         } finally {
           await sink.close();
         }
-        if (await fileSha256(pending) != spec['sha256']) {
+        if (await _downloadChecksum(pending, sourceArchive) != expected) {
           throw StateError('Download checksum mismatch: $name');
         }
         await File(pending).rename(target);
@@ -173,10 +177,34 @@ final class SnapshotterContext {
         client.close(force: true);
       }
     }
-    if (await fileSha256(target) != spec['sha256']) {
+    if (await _downloadChecksum(target, sourceArchive) != expected) {
       throw StateError('Cached download checksum mismatch: $name');
     }
     return target;
+  }
+
+  Future<String> _downloadChecksum(String path, bool sourceArchive) async {
+    if (!sourceArchive) return fileSha256(path);
+    // These archives are large. Expand to a private temporary file so hashing
+    // does not retain the entire decompressed tar in memory.
+    final stage = await Directory(cache).createTemp('.source-check-');
+    InputFileStream? input;
+    try {
+      final tar = p.join(stage.path, 'source.tar');
+      final compressed = InputFileStream(path);
+      final expanded = OutputFileStream(tar);
+      try {
+        const GZipDecoder().decodeStream(compressed, expanded);
+      } finally {
+        await compressed.close();
+        await expanded.close();
+      }
+      input = InputFileStream(tar);
+      return snapshotterSourceArchiveSha256(input);
+    } finally {
+      await input?.close();
+      await stage.delete(recursive: true);
+    }
   }
 
   /// Extract into a private staging tree, preserving executable bits on Linux.

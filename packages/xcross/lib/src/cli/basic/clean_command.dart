@@ -30,6 +30,7 @@ final class CleanCommand extends Command<void> {
   }) async {
     final paths = [
       p.join(projectRoot, 'build', 'xcross-native-assets'),
+      p.join(projectRoot, 'build', 'xcross-flutter-release'),
       for (final mode in FlutterBuildMode.values)
         SwiftPmWorkspace.forProject(
           projectRoot,

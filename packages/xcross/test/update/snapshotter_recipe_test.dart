@@ -10,6 +10,7 @@ import 'package:test/test.dart';
 import '../../tool/ios_aot/snapshotter_builder.dart';
 import '../../tool/ios_aot/snapshotter_context.dart';
 import '../../tool/ios_aot/snapshotter_inspection.dart';
+import '../../tool/ios_aot/snapshotter_source_archive.dart';
 import '../flutter/build/ios_aot_artifact_test.dart' as macho;
 
 void main() {
@@ -228,6 +229,114 @@ void main() {
         File(p.join(context.cache, 'downloads', 'bad.zip')).existsSync(),
         isFalse,
       );
+    },
+  );
+
+  test(
+    'accepts repackaged source downloads but rejects changed files and permissions',
+    () async {
+      List<int> archive({
+        int timestamp = 1,
+        int mode = 0x1a4,
+        String path = 'source.txt',
+        String content = 'verified',
+      }) => const GZipEncoder().encode(
+        TarEncoder().encode(
+          Archive()..addFile(
+            ArchiveFile.string(path, content)
+              ..mode = mode
+              ..lastModTime = timestamp
+              ..ownerId = timestamp,
+          ),
+        ),
+      );
+      final original = archive();
+      var response = archive(timestamp: 200);
+      expect(sha256.convert(original), isNot(sha256.convert(response)));
+      final expected = sha256
+          .convert(
+            utf8.encode(
+              jsonEncode([
+                [
+                  'source.txt',
+                  'file',
+                  0x1a4,
+                  sha256.convert(utf8.encode('verified')).toString(),
+                ],
+              ]),
+            ),
+          )
+          .toString();
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        request.response.add(response);
+        await request.response.close();
+      });
+      final downloads = context.pins['downloads'] as Map<String, dynamic>;
+      final spec = {
+        'url': 'http://127.0.0.1:${server.port}/source',
+        'tarContentsSha256': expected,
+      };
+      downloads['source.tar.gz'] = spec;
+      final path = await context.download('source.tar.gz');
+      // Cached archives may also differ in packaging metadata.
+      File(path).writeAsBytesSync(original);
+      expect(await context.download('source.tar.gz'), path);
+      for (final changed in [
+        archive(content: 'tampered'),
+        archive(path: 'other.txt'),
+        archive(mode: 0x1ed),
+      ]) {
+        File(path).writeAsBytesSync(changed);
+        await expectLater(context.download('source.tar.gz'), throwsStateError);
+        response = changed;
+        downloads['bad-source.tar.gz'] = spec;
+        await expectLater(
+          context.download('bad-source.tar.gz'),
+          throwsStateError,
+        );
+        expect(
+          File(
+            p.join(context.cache, 'downloads', 'bad-source.tar.gz'),
+          ).existsSync(),
+          isFalse,
+        );
+      }
+      expect(
+        Directory(context.cache).listSync().where(
+          (entry) => p.basename(entry.path).startsWith('.source-check-'),
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'source checksums cover every entry and reject ambiguous paths and links',
+    () {
+      String digest(List<ArchiveFile> entries) {
+        final archive = Archive();
+        for (final entry in entries) {
+          archive.addFile(entry);
+        }
+        return snapshotterSourceArchiveSha256(
+          InputMemoryStream(TarEncoder().encode(archive)),
+        );
+      }
+
+      final a = ArchiveFile.string('a', 'first');
+      final b = ArchiveFile.string('b', 'second');
+      expect(digest([a, b]), digest([b, a]));
+      expect(digest([a, b]), isNot(digest([a])));
+      for (final entries in [
+        <ArchiveFile>[],
+        [ArchiveFile.string('../outside', 'bad')],
+        [ArchiveFile.symlink('link', 'a')],
+        [a, ArchiveFile.string('./a', 'duplicate')],
+      ]) {
+        expect(() => digest(entries), throwsStateError);
+      }
     },
   );
 

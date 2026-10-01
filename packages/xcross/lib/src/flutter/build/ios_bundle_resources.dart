@@ -10,7 +10,12 @@ import 'package:xcross/src/flutter/errors.dart';
 
 /// Fail on unsupported source semantics before compiling Dart and plugins.
 @internal
-Future<void> validateIosResourceSources(String projectRoot) async {
+Future<void> validateIosResourceSources(
+  String projectRoot, {
+  bool strict = true,
+}) async {
+  // Debug retains the existing precompiled-resource/programmatic fallback.
+  if (!strict) return;
   final path = PbxProject.findPbxproj(projectRoot);
   if (path == null) return;
   final project = PbxProject.parseFile(path);

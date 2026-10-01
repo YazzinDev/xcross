@@ -292,13 +292,16 @@ jobs:
           flutter config --no-analytics
           flutter precache --ios
           dart pub get
+          if ($LASTEXITCODE -ne 0) { throw 'Resolving xcross dependencies failed' }
           Push-Location packages/xcross
           dart run tool/build_xcross.dart
+          if ($LASTEXITCODE -ne 0) { throw 'Building xcross failed' }
           Pop-Location
           Copy-Item -Recurse `
             packages/xcross/build/cli/windows_x64/bundle `
             "$env:RUNNER_TEMP\xcross-bundle"
           & "$env:RUNNER_TEMP\xcross-bundle\bin\xcross.exe" setup
+          if ($LASTEXITCODE -ne 0) { throw 'xcross setup failed' }
 
       - name: Test doctor on Windows
         if: runner.os == 'Windows'
@@ -314,6 +317,21 @@ jobs:
       - name: Restore cached Darwin SDK
         if: steps.darwin.outputs.available == 'true'
         uses: ./.github/actions/setup-darwin-sdk
+
+      - name: Verify release SwiftPM plugins and dSYMs on Linux
+        if: runner.os == 'Linux' && steps.darwin.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dart run packages/xcross/tool/verify_release_plugins.dart "$RUNNER_TEMP/flutter"
+
+      - name: Verify release SwiftPM plugins and dSYMs on Windows
+        if: runner.os == 'Windows' && steps.darwin.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dart run packages/xcross/tool/verify_release_plugins.dart "$env:RUNNER_TEMP\flutter"
+          if ($LASTEXITCODE -ne 0) { throw 'Release SwiftPM plugin verification failed' }
 
       - name: Build Flutter example on Linux
         if: runner.os == 'Linux' && steps.darwin.outputs.available == 'true'

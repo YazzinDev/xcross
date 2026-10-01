@@ -543,6 +543,8 @@ In debug mode Flutter apps are not compiled to machine code - the Dart VM runs *
 
 Debug does not need `gen_snapshot`. For release, `FlutterReleaseBundler` runs Flutter's release targets with the product patched SDK and the bundled host compiler targeting iOS ARM64. The resulting `App.framework` contains native AOT code, with loader exports and snapshot features checked before packaging. The normal CLI build produces the pinned compiler through the Dart recipe in `packages/xcross/tool/ios_aot/`; Python is only used by upstream Dart/GN build scripts.
 
+Release intermediates are removed after packaging, including on failure. App and native-asset dSYMs and their build evidence are retained under `build/xcross-ios-release-symbols/<UUID>/`; `xcross clean` preserves these symbols and removes leftover release intermediates. Debug keeps its existing fallback when a referenced storyboard is not available as a compiled resource. Release requires supported, compiled resources.
+
 ### 3. Native code without Xcode
 
 - **Darwin SDK** - `darwin_sdk_kit` unpacks `Xcode.xip` with pure-Dart **xar**, **pbzx**, and **cpio** readers and assembles a Swift SDK bundle (iOS sysroot + frameworks) usable by upstream Swift/LLVM on Windows and Linux.

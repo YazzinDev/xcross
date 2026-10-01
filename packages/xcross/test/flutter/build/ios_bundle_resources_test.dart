@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+import 'package:xcross/src/flutter/build/info_plist.dart';
 import 'package:xcross/src/flutter/build/ios_bundle_resources.dart';
 import 'package:xcross/src/flutter/build/pbxproj.dart';
 import 'package:xcross/src/flutter/errors.dart';
@@ -23,6 +24,45 @@ void main() {
   });
 
   tearDown(() => tmp.delete(recursive: true));
+
+  for (final source in ['unsupported', 'missing', 'unlisted']) {
+    test('debug retains fallback for $source storyboard references', () async {
+      if (source != 'missing') {
+        _file(runner, 'Base.lproj/Main.storyboard', '<unsupported/>');
+      }
+      _writeProject(
+        project,
+        appRefs: source == 'unlisted' ? [] : ['STORYBOARD'],
+      );
+      await validateIosResourceSources(project.path, strict: false);
+      await stageIosBundleResources(
+        projectRoot: project.path,
+        bundleDir: bundle.path,
+      );
+      const plist = '''
+<plist version="1.0"><dict>
+<key>UIMainStoryboardFile</key><string>Main</string>
+<key>UILaunchStoryboardName</key><string>LaunchScreen</string>
+</dict></plist>
+''';
+      final fallback = InfoPlist.stripUnsatisfiableStoryboards(
+        plist,
+        bundle.path,
+      );
+      expect(fallback, isNot(contains('UIMainStoryboardFile')));
+      expect(fallback, isNot(contains('UILaunchStoryboardName')));
+      expect(
+        () => InfoPlist.validateStoryboardReferences(plist, bundle.path),
+        throwsA(isA<FlutterBuildError>()),
+      );
+      if (source != 'unlisted') {
+        await expectLater(
+          validateIosResourceSources(project.path),
+          throwsA(isA<FlutterBuildError>()),
+        );
+      }
+    });
+  }
 
   test(
     'compiles original target storyboards without altering their sources',

@@ -22,6 +22,9 @@ void main() {
     final nativeAssets = Directory(
       p.join(project.path, 'build', 'xcross-native-assets'),
     )..createSync(recursive: true);
+    final intermediates = Directory(
+      p.join(project.path, 'build', 'xcross-flutter-release', 'build-old'),
+    )..createSync(recursive: true);
     final workspace = SwiftPmWorkspace.forProject(
       project.path,
       environment: {'XCROSS_CACHE_DIR': cache.path},
@@ -41,6 +44,7 @@ void main() {
     );
 
     expect(nativeAssets.existsSync(), isFalse);
+    expect(intermediates.existsSync(), isFalse);
     expect(swiftPm.existsSync(), isFalse);
     expect(release.existsSync(), isFalse);
   });
@@ -54,6 +58,16 @@ void main() {
     });
     final unrelated = File(p.join(project.path, 'build', 'keep.txt'))
       ..createSync(recursive: true);
+    final symbols = File(
+      p.join(
+        project.path,
+        'build',
+        'xcross-ios-release-symbols',
+        'uuid',
+        'App.framework.dSYM',
+        'symbol',
+      ),
+    )..createSync(recursive: true);
     final shared = File(
       p.join(cache.path, 'swiftpm', 'binary-artifacts-v1', 'keep.txt'),
     )..createSync(recursive: true);
@@ -64,6 +78,7 @@ void main() {
     );
 
     expect(unrelated.existsSync(), isTrue);
+    expect(symbols.existsSync(), isTrue);
     expect(shared.existsSync(), isTrue);
   });
 
