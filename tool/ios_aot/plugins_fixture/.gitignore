@@ -1,0 +1,4 @@
+/ios/Flutter/
+/ios/Runner/GeneratedPluginRegistrant.*
+/.flutter-plugins-dependencies
+!pubspec.lock

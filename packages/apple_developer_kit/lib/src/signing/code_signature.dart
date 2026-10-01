@@ -211,6 +211,7 @@ Uint8List buildCodeDirectory({
   required String teamIdentifier,
   required List<Uint8List> specialSlots,
   required String path,
+  int codeSigningFlags = 0,
 }) {
   final identifierBytes = Uint8List.fromList([...utf8.encode(identifier), 0]);
   final teamBytes = Uint8List.fromList([...utf8.encode(teamIdentifier), 0]);
@@ -233,7 +234,7 @@ Uint8List buildCodeDirectory({
   writeU32be(output, CodeDirectoryField.magic, csMagicCodeDirectory);
   writeU32be(output, CodeDirectoryField.length, length);
   writeU32be(output, CodeDirectoryField.version, codeDirectoryVersion);
-  writeU32be(output, CodeDirectoryField.flags, 0);
+  writeU32be(output, CodeDirectoryField.flags, codeSigningFlags);
   writeU32be(output, CodeDirectoryField.hashOffset, hashOffset);
   writeU32be(output, CodeDirectoryField.identOffset, CodeDirectoryField.size);
   writeU32be(output, CodeDirectoryField.nSpecialSlots, specialSlots.length);
@@ -245,7 +246,9 @@ Uint8List buildCodeDirectory({
   writeU32be(
     output,
     CodeDirectoryField.teamOffset,
-    CodeDirectoryField.size + identifierBytes.length,
+    teamIdentifier.isEmpty
+        ? 0
+        : CodeDirectoryField.size + identifierBytes.length,
   );
   writeU64be(output, CodeDirectoryField.execSegBase, 0);
   writeU64be(output, CodeDirectoryField.execSegLimit, execSegmentLimit);

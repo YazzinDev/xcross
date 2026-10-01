@@ -17,6 +17,8 @@ import 'package:cli_kit/cli_kit.dart';
 /// * The unversioned `gcc`/`g++` metapackages stand in for Debian's
 ///   `libstdc++-N-dev`/`libgcc-N-dev`, whose N differs per release.
 const _aptPackages = [
+  'librsvg2-bin',
+  'git',
   'clang',
   'lld',
   'llvm',
@@ -42,6 +44,8 @@ const _aptPackages = [
 ];
 
 const _dnfPackages = [
+  'librsvg2-tools',
+  'git',
   'clang',
   'lld',
   'llvm',
@@ -66,6 +70,8 @@ const _dnfPackages = [
 ];
 
 const _pacmanPackages = [
+  'librsvg',
+  'git',
   'clang',
   'lld',
   'llvm',

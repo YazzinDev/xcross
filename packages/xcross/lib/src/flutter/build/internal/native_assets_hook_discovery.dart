@@ -5,7 +5,10 @@ import 'package:xcross/src/flutter/errors.dart';
 import 'package:xcross/src/package_config_resolver.dart';
 
 /// Whether any package in the resolved package graph has a build hook.
-Future<bool> hasNativeAssetsBuildHooks(String projectRoot) async {
+Future<bool> hasNativeAssetsBuildHooks(
+  String projectRoot, {
+  bool includeLinkHooks = false,
+}) async {
   final String configPath;
   try {
     configPath = await PackageConfigResolver.require(projectRoot);
@@ -47,7 +50,11 @@ Future<bool> hasNativeAssetsBuildHooks(String projectRoot) async {
       final root = configUri.resolve(package['rootUri']! as String);
       if (!root.isScheme('file')) continue;
       final rootDirectory = Uri.directory(root.toFilePath());
-      if (File.fromUri(rootDirectory.resolve('hook/build.dart')).existsSync()) {
+      if (File.fromUri(rootDirectory.resolve('hook/build.dart')).existsSync() ||
+          (includeLinkHooks &&
+              File.fromUri(
+                rootDirectory.resolve('hook/link.dart'),
+              ).existsSync())) {
         return true;
       }
     } on FormatException {

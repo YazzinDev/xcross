@@ -4,6 +4,9 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:xcross/src/flutter/build/ios_bundle_resources.dart';
 import 'package:xcross/src/flutter/build/pbxproj.dart';
+import 'package:xcross/src/flutter/errors.dart';
+
+import 'resource_compilers_test.dart' show storyboard;
 
 void main() {
   late Directory tmp;
@@ -20,6 +23,85 @@ void main() {
   });
 
   tearDown(() => tmp.delete(recursive: true));
+
+  test(
+    'compiles original target storyboards without altering their sources',
+    () async {
+      _file(runner, 'Base.lproj/Main.storyboard', storyboard);
+      _writeProject(project, appRefs: ['STORYBOARD']);
+      await stageIosBundleResources(
+        projectRoot: project.path,
+        bundleDir: bundle.path,
+        strict: true,
+        compileSources: true,
+      );
+      expect(
+        _bundleFile(bundle, 'Main.storyboardc/Info.plist').existsSync(),
+        isTrue,
+      );
+      expect(
+        Directory(
+          p.join(bundle.path, 'Main.storyboardc'),
+        ).listSync().where((file) => file.path.endsWith('.nib')),
+        hasLength(2),
+      );
+      expect(
+        File(
+          p.join(runner.path, 'Base.lproj/Main.storyboard'),
+        ).readAsStringSync(),
+        storyboard,
+      );
+      expect(_bundleFile(bundle, 'Main.storyboard').existsSync(), isFalse);
+    },
+  );
+
+  test(
+    'strict release rejects uncompiled catalogs and missing storyboards',
+    () async {
+      _file(runner, 'Assets.xcassets/Contents.json', '{}');
+      _writeProject(project, appRefs: ['ASSETS']);
+      await expectLater(
+        stageIosBundleResources(
+          projectRoot: project.path,
+          bundleDir: bundle.path,
+          strict: true,
+        ),
+        throwsA(
+          isA<FlutterBuildError>().having(
+            (e) => e.message,
+            'message',
+            contains('actool'),
+          ),
+        ),
+      );
+      _file(runner, 'Base.lproj/Main.storyboard', 'source');
+      _writeProject(project, appRefs: ['STORYBOARD']);
+      await expectLater(
+        stageIosBundleResources(
+          projectRoot: project.path,
+          bundleDir: bundle.path,
+          strict: true,
+        ),
+        throwsA(
+          isA<FlutterBuildError>().having(
+            (e) => e.message,
+            'message',
+            contains('ibtool'),
+          ),
+        ),
+      );
+      _file(runner, 'Base.lproj/Main.storyboardc/scene.nib', 'compiled');
+      await stageIosBundleResources(
+        projectRoot: project.path,
+        bundleDir: bundle.path,
+        strict: true,
+      );
+      expect(
+        _bundleFile(bundle, 'Main.storyboardc/scene.nib').readAsStringSync(),
+        'compiled',
+      );
+    },
+  );
 
   test('finds a uniquely relocated target resource', () async {
     _file(runner, 'ServiceConfig.plist', 'config');

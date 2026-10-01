@@ -1,0 +1,9 @@
+name: xcross_ios_ffi_probe
+publish_to: none
+environment:
+  sdk: ^3.13.0
+dependencies:
+  flutter:
+    sdk: flutter
+  xcross_c_ffi_probe:
+    path: ../c_ffi

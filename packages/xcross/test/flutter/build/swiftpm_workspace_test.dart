@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
+import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
 
 void main() {
   late Directory temp;
@@ -12,6 +13,18 @@ void main() {
   });
 
   tearDown(() => temp.deleteSync(recursive: true));
+
+  test('release isolates build state while sharing immutable artifacts', () {
+    final debug = SwiftPmWorkspace.forProject(temp.path);
+    final release = SwiftPmWorkspace.forProject(
+      temp.path,
+      mode: FlutterBuildMode.release,
+    );
+    expect(release.root, isNot(debug.root));
+    expect(release.scratch, isNot(debug.scratch));
+    expect(release.packages, isNot(debug.packages));
+    expect(release.binaryArtifactStore, debug.binaryArtifactStore);
+  });
 
   test('uses a stable project key', () {
     final first = SwiftPmWorkspace.forProject(

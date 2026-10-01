@@ -11,6 +11,7 @@ import 'package:xcross/src/flutter/build/flutter_packer.dart';
 import 'package:xcross/src/flutter/build/info_plist.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_gate_evidence.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
+import 'package:xcross/src/flutter/build/ios_plugins.dart';
 import 'package:xcross/src/flutter/constants.dart';
 import 'package:xcross/src/flutter/errors.dart';
 import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
@@ -36,6 +37,33 @@ Future<void> _deleteTemp(Directory directory) async {
 }
 
 void main() {
+  test(
+    'release refuses CocoaPods-only and missing native plugin packages',
+    () async {
+      final project = await Directory.systemTemp.createTemp(
+        'xcross-unsupported-plugin-',
+      );
+      addTearDown(() => project.delete(recursive: true));
+      final plugin = IosPlugin(name: 'unsupported', packageRoot: project.path);
+      final podspec = File(plugin.podspecPath)..createSync(recursive: true);
+      expect(
+        () => FlutterPacker.validateReleasePlugins([plugin]),
+        throwsA(isA<FlutterBuildError>()),
+      );
+      podspec.deleteSync();
+      File(p.join(project.path, 'pubspec.yaml')).writeAsStringSync(
+        'flutter:\n  plugin:\n    platforms:\n      ios:\n        pluginClass: ProbePlugin\n',
+      );
+      expect(
+        () => FlutterPacker.validateReleasePlugins([plugin]),
+        throwsA(isA<FlutterBuildError>()),
+      );
+      File(plugin.swiftPackageManifest)
+        ..createSync(recursive: true)
+        ..writeAsStringSync('// fixture');
+      FlutterPacker.validateReleasePlugins([plugin]);
+    },
+  );
   test('Debug includes and CLI versions reach the final plist values', () async {
     final project = await Directory.systemTemp.createTemp('xcross-plist-');
     addTearDown(() => project.delete(recursive: true));
@@ -643,7 +671,6 @@ void main() {
   });
   test('uses xcross build, temp, and DevFS names', () {
     final debugBundler = _read('build/flutter_debug_bundler.dart');
-    final packOperation = _read('build/flutter_pack_operation.dart');
     final hotReload = _read('build/hot_reload_setup.dart');
     // Scanned as a directory, not a fixed filename: the incremental dill path
     // has already moved once (out of the deleted frontend_server_client.dart,
@@ -665,7 +692,8 @@ void main() {
       reason: 'the native-assets builder owns this manifest',
     );
     expect(debugBundler, contains("'xcross-flutter-stub-'"));
-    expect(packOperation, contains("'xcross-ios'"));
+    expect(const FlutterBuildOptions().mode.bundleDirectory, 'xcross-ios');
+    expect(FlutterBuildMode.release.bundleDirectory, 'xcross-ios-release');
     expect(hotReload, contains("'xcross-flutter-debug'"));
     expect(hotReloadSources, contains('build/xcross-flutter-debug'));
     expect(FlutterDeviceConstants.devFsName, 'xcross');

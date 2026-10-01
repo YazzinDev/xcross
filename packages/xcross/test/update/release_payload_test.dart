@@ -39,6 +39,30 @@ void main() {
   String read(String relative) =>
       File(p.join(destination.path, relative)).readAsStringSync();
 
+  for (final zip in [false, true]) {
+    test(
+      'preserves compiler, manifest and notices in ${zip ? 'zip' : 'tar'} updates',
+      () async {
+        final payload = {
+          'lib/gen_snapshot_ios_arm64${zip ? '.exe' : ''}': 'compiler',
+          'lib/xcross-ios-aot-manifest.json':
+              '{"binaryRelativePath":"compiler"}',
+          'lib/ios-aot-NOTICES.txt': 'Dart and dependency licenses',
+        };
+        final archive = _bundle(extra: payload);
+        await ReleasePayload.extract(
+          bytes: zip ? _zip(archive) : _tarGz(archive),
+          asset: zip ? 'xcross-windows-x64.zip' : 'xcross-linux-x64.tar.gz',
+          destination: destination,
+          executableName: 'xcross',
+        );
+        for (final entry in payload.entries) {
+          expect(read(entry.key), entry.value);
+        }
+      },
+    );
+  }
+
   test('unpacks a tar.gz bundle', () async {
     await ReleasePayload.extract(
       bytes: _tarGz(_bundle()),

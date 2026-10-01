@@ -9,13 +9,22 @@ import 'package:xcross/src/cli/basic/internal/clang_requirement.dart';
 import 'package:xcross/src/cli/basic/internal/linux_package_manager.dart';
 import 'package:xcross/src/cli/basic/internal/swift_requirement.dart';
 import 'package:xcross/src/errors.dart';
+import 'package:xcross/src/flutter/build/resources/asset_catalog_compiler.dart';
 import 'package:xcross/src/setup/setup_script.dart';
 
-const _requiredTools = ['swift', 'clang', 'clang++', 'llvm-ar', 'ld64.lld'];
+const _requiredTools = [
+  'swift',
+  'clang',
+  'clang++',
+  'llvm-ar',
+  'ld64.lld',
+  'git',
+];
 
 /// `xcross setup` — install host requirements through apt/dnf/pacman (Linux)
 /// or Homebrew (macOS), then pipx and pymobiledevice3. On Windows, verifies
-/// tools already on PATH and installs pymobiledevice3.
+/// tools already on PATH and installs pymobiledevice3. Prepares the pinned
+/// asset catalog compiler after the host requirements are available.
 final class SetupCommand extends Command<void> {
   SetupCommand() {
     argParser.addFlag(
@@ -42,13 +51,21 @@ final class SetupCommand extends Command<void> {
     }
     if (configuredScript.isConfigured) {
       await configuredScript.run();
-      Log.logDone('Configured setup script completed');
-      return;
+    } else {
+      await SwiftRequirement.require('set up this host');
+      if (Platform.isWindows) {
+        await _setupWindows();
+      } else if (Platform.isMacOS) {
+        await _setupMacos();
+      } else {
+        await _setupLinux();
+      }
     }
-    await SwiftRequirement.require('set up this host');
-    if (Platform.isWindows) return _setupWindows();
-    if (Platform.isMacOS) return _setupMacos();
-    return _setupLinux();
+    await Log.logStep(
+      'Preparing asset catalog compiler',
+      AssetCatalogCompiler().prepare,
+    );
+    Log.logDone('Setup completed');
   }
 
   Future<void> _setupLinux() async {
@@ -90,7 +107,7 @@ final class SetupCommand extends Command<void> {
       );
     }
 
-    await _brewInstall(const ['lld', 'llvm']);
+    await _brewInstall(const ['lld', 'llvm', 'git', 'librsvg']);
 
     final missing = await _missingTools(_requiredTools);
     if (missing.isNotEmpty) {
@@ -117,11 +134,12 @@ final class SetupCommand extends Command<void> {
       'swift',
       'llvm-ar',
       'ld64.lld',
+      'git',
     ]);
     if (missing.isNotEmpty) {
       throw XcrossError(
         'Missing Windows requirements on PATH: ${missing.join(', ')}.\n'
-        'Install Flutter, Swift, and the official LLVM Windows toolchain, '
+        'Install Flutter, Swift, Git, and the official LLVM Windows toolchain, '
         'then retry.',
       );
     }

@@ -19,6 +19,11 @@ T _$enumValueHelper<T>(Map<T, String> enumValues, String source) => enumValues
 
 FlutterRunArgs _$parseFlutterRunArgsResult(ArgResults result) =>
     FlutterRunArgs()
+      ..obfuscate = result['obfuscate'] as bool
+      ..splitDebugInfo = result['split-debug-info'] as String?
+      ..debug = result['debug'] as bool
+      ..release = result['release'] as bool
+      ..profile = result['profile'] as bool
       ..target = result['target'] as String
       ..flavor = result['flavor'] as String?
       ..dartDefine = result['dart-define'] as List<String>
@@ -43,6 +48,27 @@ const _$DeviceConnectionEnumMapBuildCli = <DeviceConnection, String>{
 };
 
 ArgParser _$populateFlutterRunArgsParser(ArgParser parser) => parser
+  ..addFlag(
+    'obfuscate',
+    help: 'Obfuscate Dart names (requires --release and --split-debug-info).',
+    negatable: false,
+  )
+  ..addOption(
+    'split-debug-info',
+    help:
+        'Directory for Dart stack trace symbols; keep this output for symbolication.',
+  )
+  ..addFlag('debug', help: 'Build a debug JIT app (default).', negatable: false)
+  ..addFlag(
+    'release',
+    help: 'Build a release iOS ARM64 AOT app.',
+    negatable: false,
+  )
+  ..addFlag(
+    'profile',
+    help: 'Profile mode (currently unsupported).',
+    negatable: false,
+  )
   ..addOption(
     'target',
     abbr: 't',

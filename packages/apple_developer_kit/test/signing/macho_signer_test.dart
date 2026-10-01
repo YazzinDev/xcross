@@ -11,6 +11,47 @@ import 'package:propertylistserialization/propertylistserialization.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'ad-hoc dylib signing seals real page hashes without CMS or team identity',
+    () {
+      final signed = MachOSigner.signAdhocBytes(
+        path: 'native',
+        bytes: _macho(fileType: _mhDylib),
+        identifier: 'dev.xcross.native',
+      );
+      final command = _codeSignatureCommand(signed);
+      final limit = _u32le(signed, command + 8);
+      final slots = _signatureSlots(signed, limit);
+      expect(slots.keys, [0]);
+      final directory = slots[0]!;
+      expect(_u32be(directory, 12), 2);
+      expect(_u32be(directory, 48), 0);
+      final hashes = _u32be(directory, 16);
+      final count = _u32be(directory, 28);
+      for (var page = 0; page < count; page++) {
+        final start = page * 4096;
+        final end = start + 4096 < limit ? start + 4096 : limit;
+        expect(
+          directory.sublist(hashes + page * 32, hashes + (page + 1) * 32),
+          orderedEquals(sha256.convert(signed.sublist(start, end)).bytes),
+        );
+      }
+      final again = MachOSigner.signAdhocBytes(
+        path: 'native',
+        bytes: signed,
+        identifier: 'dev.xcross.native',
+      );
+      expect(again, orderedEquals(signed));
+      expect(
+        () => MachOSigner.signAdhocBytes(
+          path: 'Runner',
+          bytes: _macho(),
+          identifier: 'dev.xcross.Runner',
+        ),
+        throwsA(isA<AppleError>()),
+      );
+    },
+  );
   final signingTime = DateTime.utc(2030, 2, 3, 4, 5, 6);
   late Directory temporaryDirectory;
   late SigningAsset asset;

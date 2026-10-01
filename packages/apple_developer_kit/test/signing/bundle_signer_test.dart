@@ -38,6 +38,58 @@ void main() {
   });
 
   test(
+    'seals SwiftPM resource bundles and rejects hidden executable code',
+    () async {
+      final app = _app(temporaryDirectory, 'resources', 'dev.xcross.Runner');
+      final resource =
+          File(p.join(app.path, 'Support_ProbeSupport.bundle', 'marker.txt'))
+            ..createSync(recursive: true)
+            ..writeAsStringSync('resource');
+      final signer = BundleSigner(exactAsset);
+      await signer.signApp(app.path, signingTime: signingTime);
+      final seal = _plist(
+        File(
+          p.join(app.path, '_CodeSignature', 'CodeResources'),
+        ).readAsBytesSync(),
+      );
+      final files = _map(seal['files2']);
+      expect(files, contains('Support_ProbeSupport.bundle/marker.txt'));
+      final entry = _map(files['Support_ProbeSupport.bundle/marker.txt']);
+      expect(
+        _bytes(entry['hash2']),
+        orderedEquals(sha256.convert(resource.readAsBytesSync()).bytes),
+      );
+
+      final hidden = File(p.join(resource.parent.path, 'hidden.bin'));
+      hidden.writeAsBytesSync(
+        File(p.join(app.path, 'Runner')).readAsBytesSync(),
+      );
+      await expectLater(
+        signer.preflight(app.path),
+        throwsA(
+          isA<AppleError>().having(
+            (error) => error.message,
+            'message',
+            contains('unknown nested Mach-O code'),
+          ),
+        ),
+      );
+      hidden.deleteSync();
+      _writeInfo(resource.parent.path, 'not-present', 'dev.xcross.Hidden');
+      await expectLater(
+        signer.preflight(app.path),
+        throwsA(
+          isA<AppleError>().having(
+            (error) => error.message,
+            'message',
+            contains('unsupported nested code bundle'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
     'signs children first and emits deterministic zsign file seals',
     () async {
       final app = _app(temporaryDirectory, 'complete', 'dev.xcross.Runner');

@@ -26,7 +26,8 @@ const _vmServicePollInterval = Duration(milliseconds: 800);
 const _terminateDiscoveryTimeout = Duration(seconds: 8);
 
 /// Launches an installed app on an iOS 17+ device through a CoreDevice RSD
-/// tunnel. Blocks until the app exits or the user presses `q`/Ctrl-C.
+/// tunnel. Debug sessions block until exit; independent launches return after
+/// ProcessControl reports the PID and leave the application running.
 abstract final class CoreDeviceLauncher {
   static bool get _isDap => Platform.environment['XCROSS_DAP'] == '1';
 
@@ -48,6 +49,15 @@ abstract final class CoreDeviceLauncher {
     final transport = await DeviceTransportResolver.resolve(udid: udid);
     Log.logTrace('device transport: ${transport.description}');
     try {
+      if (!profile.attachDebugger) {
+        final launchedPid = await Pymd.launchNormally(
+          deviceArgs: transport.pymdDeviceArgs,
+          bundleId: bundleId,
+          appArguments: profile.argumentsForLaunch(isDap: false),
+        );
+        Log.logDone('Launched $bundleId (pid $launchedPid) without a debugger');
+        return;
+      }
       await _runSession(
         transport: transport,
         udid: udid,

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" targetRuntime="iOS.CocoaTouch" initialViewController="launch" launchScreen="YES" useAutolayout="YES">
+  <scenes><scene sceneID="launch-scene"><objects>
+    <viewController id="launch">
+      <view key="view" id="background">
+        <rect key="frame" x="0" y="0" width="390" height="844"/>
+        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+        <color key="backgroundColor" red="0.05" green="0.2" blue="0.8" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+        <subviews><view id="marker" translatesAutoresizingMaskIntoConstraints="NO">
+          <rect key="frame" x="145" y="372" width="100" height="100"/>
+          <color key="backgroundColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+          <constraints>
+            <constraint firstAttribute="width" constant="100" id="width"/>
+            <constraint firstAttribute="height" constant="100" id="height"/>
+          </constraints>
+        </view></subviews>
+        <constraints>
+          <constraint firstItem="marker" firstAttribute="centerX" secondItem="background" secondAttribute="centerX" id="center-x"/>
+          <constraint firstItem="marker" firstAttribute="centerY" secondItem="background" secondAttribute="centerY" id="center-y"/>
+        </constraints>
+      </view>
+    </viewController>
+  </objects></scene></scenes>
+</document>

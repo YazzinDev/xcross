@@ -557,7 +557,7 @@ final class FlutterDebugBundler {
     ).writeAsStringSync(appFrameworkInfoPlist(deploymentTarget));
   }
 
-  @visibleForTesting
+  /// Framework metadata shared by the JIT and AOT bundle builders.
   static String appFrameworkInfoPlist(IosDeploymentTarget deploymentTarget) {
     return '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'

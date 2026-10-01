@@ -4,6 +4,9 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:xcross/src/update/semver.dart';
 
+import 'ios_aot/snapshotter_builder.dart';
+import 'ios_aot/snapshotter_context.dart';
+
 const _encodedVersion = String.fromEnvironment(
   'XCROSS_VERSION',
   defaultValue: 'unreleased',
@@ -30,6 +33,7 @@ Future<int> buildXcross({
   required String encodedVersion,
   required bool released,
   BuildCliRun? runBuild,
+  Future<void> Function(String repository, String output)? buildAot,
 }) async {
   final version = _normalizeVersion(Uri.decodeComponent(encodedVersion));
   _validateIdentity(packageRoot, version, released: released);
@@ -63,11 +67,22 @@ Future<int> buildXcross({
       executable,
     );
     await File(source).copy(destination);
+    // Keep auxiliary compilers in the flat lib payload understood by both
+    // release installers and the transactional self-updater.
+    final repository = p.normalize(p.join(packageRoot.path, '..', '..'));
+    await (buildAot ?? _buildAot)(
+      repository,
+      p.join(p.dirname(p.dirname(destination)), 'lib'),
+    );
     return 0;
   } finally {
     await generated.writeAsBytes(original, flush: true);
   }
 }
+
+Future<void> _buildAot(String repository, String output) => SnapshotterBuilder(
+  SnapshotterContext(repository),
+).build(packageOutput: output);
 
 Future<int> _buildCliExecutable(
   BuildCliRun run,

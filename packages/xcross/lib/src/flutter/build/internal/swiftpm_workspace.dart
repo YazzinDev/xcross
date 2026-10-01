@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
+import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
 
 final class SwiftPmWorkspace {
   const SwiftPmWorkspace._({required this.cacheRoot, required this.root});
@@ -23,6 +24,7 @@ final class SwiftPmWorkspace {
 
   factory SwiftPmWorkspace.forProject(
     String projectRoot, {
+    FlutterBuildMode mode = FlutterBuildMode.debug,
     Map<String, String>? environment,
     bool? windows,
   }) {
@@ -38,7 +40,11 @@ final class SwiftPmWorkspace {
         .substring(0, 16);
     return SwiftPmWorkspace._(
       cacheRoot: base,
-      root: p.join(base, 'swiftpm', key),
+      root: p.join(
+        base,
+        'swiftpm',
+        mode == FlutterBuildMode.debug ? key : '$key-${mode.name}',
+      ),
     );
   }
 

@@ -227,6 +227,30 @@ abstract final class Pymd {
     required List<String> deviceArgs,
     required String bundleId,
     required List<String> appArguments,
+  }) => _launchProcess(
+    deviceArgs: deviceArgs,
+    bundleId: bundleId,
+    appArguments: appArguments,
+    suspended: true,
+  );
+
+  /// Start normally, without a debugger or a persistent host launch session.
+  static Future<int> launchNormally({
+    required List<String> deviceArgs,
+    required String bundleId,
+    required List<String> appArguments,
+  }) => _launchProcess(
+    deviceArgs: deviceArgs,
+    bundleId: bundleId,
+    appArguments: appArguments,
+    suspended: false,
+  );
+
+  static Future<int> _launchProcess({
+    required List<String> deviceArgs,
+    required String bundleId,
+    required List<String> appArguments,
+    required bool suspended,
   }) async {
     final joined = ProcessRunner.commandLine(bundleId, appArguments);
     final args = [
@@ -234,7 +258,7 @@ abstract final class Pymd {
       'dvt',
       'launch',
       ...deviceArgs,
-      '--suspended',
+      if (suspended) '--suspended',
       '--kill-existing',
       '--',
       joined,

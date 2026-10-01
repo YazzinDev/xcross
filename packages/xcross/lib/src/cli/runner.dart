@@ -48,6 +48,7 @@ Future<int?> runPreparedToolAlias(
               : p.basenameWithoutExtension(path))
           .toLowerCase();
   if (name == 'plutil') return runPlutilAlias(arguments);
+  if (name == 'codesign') return runAdhocCodesignAlias(arguments);
   final variable = _toolAliasVariables[name];
   if (variable == null) return null;
 
@@ -87,6 +88,52 @@ Future<int?> runPreparedToolAlias(
         ]
       : arguments;
   return invoke(target, forwarded);
+}
+
+/// The intermediate native-asset signing surface for Windows and Linux.
+/// Reject certificate identities and unsupported flags instead of pretending
+/// to implement Apple's complete codesign command.
+Future<int> runAdhocCodesignAlias(List<String> arguments) async {
+  String? identity;
+  String? target;
+  for (var index = 0; index < arguments.length; index++) {
+    final argument = arguments[index];
+    if (argument == '--sign' && index + 1 < arguments.length) {
+      identity = arguments[++index];
+    } else if (argument == '--force' || argument == '--timestamp=none') {
+      continue;
+    } else if (!argument.startsWith('-') && target == null) {
+      target = argument;
+    } else {
+      stderr.writeln('codesign: unsupported argument $argument');
+      return 1;
+    }
+  }
+  if (identity != '-' || target == null || !target.endsWith('.framework')) {
+    stderr.writeln(
+      'codesign: only --sign - <intermediate.framework> is supported',
+    );
+    return 1;
+  }
+  final info = File(p.join(target, 'Info.plist'));
+  final identifier = InfoPlist.readBundleIdentifier(await info.readAsString());
+  if (identifier == null) {
+    throw XcrossError('Missing CFBundleIdentifier in ${info.path}');
+  }
+  final binary = p.join(target, p.basenameWithoutExtension(target));
+  final thinDirectory = await Directory.systemTemp.createTemp('xcross-adhoc-');
+  try {
+    final slice = _arm64Slice(binary, thinDirectory, 0);
+    if (slice != null) await File(slice).copy(binary);
+    await MachOSigner.signAdhocFile(
+      binary,
+      identifier: identifier,
+      infoPlistBytes: await info.readAsBytes(),
+    );
+  } finally {
+    await thinDirectory.delete(recursive: true);
+  }
+  return 0;
 }
 
 /// `llvm-ar` next to a missing `llvm-libtool-darwin`: the official LLVM

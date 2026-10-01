@@ -166,7 +166,10 @@ final class IosNativeAssetsBuilder {
     if (iosSdk != null) '-dSdkRoot=$iosSdk',
     '-dTargetFile=$entrypoint',
     '-dIosDeploymentTarget=${deploymentTarget.version}',
-    '-dDartDefines=${DartDefines.withFlavor(dartDefines, flavor).map((define) => base64.encode(utf8.encode(define))).join(',')}',
+    // Assemble accepts base64 values here. Its legacy -d option splits commas,
+    // which would turn subsequent encoded values into separate build settings.
+    for (final define in DartDefines.withFlavor(dartDefines, flavor))
+      '--dart-define=${base64.encode(utf8.encode(define))}',
     if (iosSdk != null)
       'debug_ios_bundle_flutter_assets'
     else

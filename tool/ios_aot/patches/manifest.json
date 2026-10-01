@@ -1,0 +1,64 @@
+{
+  "windows": {
+    "patchSha256": "1ff06a8a747e8d86ca9ef27b0eb9dff3753400a6dca4625be8a1603ec4589475",
+    "files": {
+      "runtime/BUILD.gn": {
+        "originalSha256": "6d1c59419cdf7c4c01b00ad892627866475b8fd7d86f4b4c8e9e0180ecfb09dd",
+        "patchedSha256": "2c8471b0ddab3a0b7c5d6f93f41af2efc045b3bc72a9226f837536c8fad86f23"
+      },
+      "runtime/configs.gni": {
+        "originalSha256": "87acf687330c39791b0567564d52d140c2c883fc19adcb0f682dc1b9b299a15a",
+        "patchedSha256": "5163e0fcc2b355c4df4514d01f982a3d94e692115c8c2ab1433941166f46f9f7"
+      },
+      "runtime/bin/BUILD.gn": {
+        "originalSha256": "b44d588671967a2e52dce82ce7b15db5baa4ea5e6609d564ab6a8334f62d596d",
+        "patchedSha256": "bca773594cf793003982a3f8e5e548cf100f60874d3e262c61fc34ceb71f2e75"
+      },
+      "runtime/vm/dwarf.cc": {
+        "originalSha256": "1a5772a0a0827385bd8f00e3216c4f62b2c04032d44fa09d5f7668b5a8f3c068",
+        "patchedSha256": "15b0bbda1bfc9e1210eb17300cfb9d91449f6a847e85010d351a2c9e43e8b080"
+      },
+      "runtime/bin/gen_snapshot.cc": {
+        "originalSha256": "595d02d9e0322eba37a21cba3e3fdfa53e731eabe1d8697ce274e159824f5d2d",
+        "patchedSha256": "1889e66ce5aa0b52e4a94d055fd08c61883710525861696df3092400d0d5f47f"
+      },
+      "build/toolchain/win/setup_toolchain.py": {
+        "originalSha256": "d771030781416b3c9484709cc0f91de696d5f0bfc0ba5107d556c1ac12848c7e",
+        "patchedSha256": "c08f62e767cba552091126bcb6f30bfdd1ef184291d293755453b44a2292f11b"
+      }
+    }
+  },
+  "linux": {
+    "patchSha256": "f1cfe01d17c79da0e33da95c4dab79f0fa86f665715946d6c0842af9515ba458",
+    "files": {
+      "runtime/BUILD.gn": {
+        "originalSha256": "6d1c59419cdf7c4c01b00ad892627866475b8fd7d86f4b4c8e9e0180ecfb09dd",
+        "patchedSha256": "2c8471b0ddab3a0b7c5d6f93f41af2efc045b3bc72a9226f837536c8fad86f23"
+      },
+      "runtime/configs.gni": {
+        "originalSha256": "87acf687330c39791b0567564d52d140c2c883fc19adcb0f682dc1b9b299a15a",
+        "patchedSha256": "5163e0fcc2b355c4df4514d01f982a3d94e692115c8c2ab1433941166f46f9f7"
+      },
+      "runtime/bin/BUILD.gn": {
+        "originalSha256": "b44d588671967a2e52dce82ce7b15db5baa4ea5e6609d564ab6a8334f62d596d",
+        "patchedSha256": "bca773594cf793003982a3f8e5e548cf100f60874d3e262c61fc34ceb71f2e75"
+      },
+      "runtime/vm/dwarf.cc": {
+        "originalSha256": "1a5772a0a0827385bd8f00e3216c4f62b2c04032d44fa09d5f7668b5a8f3c068",
+        "patchedSha256": "15b0bbda1bfc9e1210eb17300cfb9d91449f6a847e85010d351a2c9e43e8b080"
+      },
+      "build/toolchain/linux/BUILD.gn": {
+        "originalSha256": "73e6f83ed37aad2e41367313f79586ccc954c9129e52922fc82d72e3c9f2270b",
+        "patchedSha256": "79865b618931bad723a938f298fe6eaa2d909f77d98a0697377b1cc27359eaf1"
+      },
+      "build/config/compiler/BUILD.gn": {
+        "originalSha256": "4a191a2faef2e8a770416c6979b2b44bbcb94a59faaa7055eea004967a49bdaa",
+        "patchedSha256": "b4f8db58f7098a5368418cdb53a888da9407cb9fed63fe26250a508a000a17e7"
+      },
+      "build/config/linux/BUILD.gn": {
+        "originalSha256": "e2d9545a32e93bc51393320ecb0f86b2b5a2d960d049ad4e956de16652f591f0",
+        "patchedSha256": "636b840fa696cba7755afe0b7e63d4f1494ec17f68cf52eb10f4044736950735"
+      }
+    }
+  }
+}

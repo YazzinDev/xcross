@@ -358,6 +358,39 @@ void main() {
     );
   });
 
+  test(
+    'Linux release aliases require native xcross rather than the Dart VM',
+    () async {
+      expect(
+        await resolveNativeAssetToolForwarder(
+          '/sdk/bin/dart',
+          windows: false,
+          requireNative: true,
+          findInstalled: () async => '/bundle/bin/xcross',
+        ),
+        '/bundle/bin/xcross',
+      );
+      expect(
+        await resolveNativeAssetToolForwarder(
+          '/sdk/bin/dart',
+          windows: false,
+          requireNative: true,
+          findInstalled: () async => null,
+        ),
+        isNull,
+      );
+      expect(
+        await resolveNativeAssetToolForwarder(
+          '/bundle/bin/xcross',
+          windows: false,
+          requireNative: true,
+          findInstalled: () async => fail('must not search'),
+        ),
+        '/bundle/bin/xcross',
+      );
+    },
+  );
+
   test('Windows prefers a configured native xcross launcher', () async {
     final tmp = await Directory.systemTemp.createTemp('apple_shims_fwd-');
     try {

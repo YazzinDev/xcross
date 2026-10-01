@@ -2,6 +2,7 @@ import 'package:args/command_runner.dart';
 import 'package:build_cli_annotations/build_cli_annotations.dart';
 import 'package:cli_kit/cli_kit.dart';
 import 'package:xcross/src/cli/shared/ipa_packager.dart';
+import 'package:xcross/src/flutter/build/internal/build_lock.dart';
 import 'package:xcross/src/flutter/flutter.dart';
 
 part 'flutter_build_command.g.dart';
@@ -9,6 +10,27 @@ part 'flutter_build_command.g.dart';
 /// Shared `flutter build`/`flutter run` options: entry-point target, flavor,
 /// dart-defines, and `--pub`.
 class CommonFlutterArgs {
+  @CliOption(
+    help: 'Obfuscate Dart names (requires --release and --split-debug-info).',
+    negatable: false,
+  )
+  late bool obfuscate;
+
+  @CliOption(
+    help:
+        'Directory for Dart stack trace symbols; keep this output for symbolication.',
+  )
+  late String? splitDebugInfo;
+
+  @CliOption(help: 'Build a debug JIT app (default).', negatable: false)
+  late bool debug;
+
+  @CliOption(help: 'Build a release iOS ARM64 AOT app.', negatable: false)
+  late bool release;
+
+  @CliOption(help: 'Profile mode (currently unsupported).', negatable: false)
+  late bool profile;
+
   @CliOption(
     abbr: 't',
     defaultsTo: 'lib/main.dart',
@@ -48,7 +70,7 @@ final class FlutterBuildArgs extends CommonFlutterArgs {
 
 /// `xcross flutter build` — build a Flutter iOS `.app` (optionally ipa).
 ///
-/// xcross is debug-only; `build` produces an unsigned bundle and signing
+/// `build` produces an unsigned bundle and signing
 /// happens when `xcross flutter run` installs it.
 final class FlutterBuildCommand extends _$FlutterBuildArgsCommand<void> {
   @override
@@ -58,15 +80,24 @@ final class FlutterBuildCommand extends _$FlutterBuildArgsCommand<void> {
   String get description => 'Build a Flutter iOS .app without Xcode.';
 
   @override
-  Future<void> run() async {
+  Future<void> run() => withFlutterProjectLock(_runLocked);
+
+  Future<void> _runLocked() async {
     final options = await FlutterBuildOptions.resolve(
       target: _options.target,
+      obfuscate: _options.obfuscate,
+      splitDebugInfo: _options.splitDebugInfo,
       dartDefine: _options.dartDefine,
       dartDefineFromFile: _options.dartDefineFromFile,
       pub: _options.pub,
       buildName: _options.buildName,
       buildNumber: _options.buildNumber,
       flavor: _options.flavor,
+      mode: FlutterBuildMode.fromFlags(
+        debug: _options.debug,
+        release: _options.release,
+        profile: _options.profile,
+      ),
     );
 
     final result = await FlutterPackOperation.pack(options: options);

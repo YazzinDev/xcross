@@ -4,21 +4,32 @@ import 'dart:io';
 import 'package:archive/archive_io.dart';
 import 'package:cli_kit/cli_kit.dart';
 import 'package:path/path.dart' as p;
+import 'package:xcross/src/flutter/build/internal/atomic_cache.dart';
 import 'package:xcross/src/flutter/constants.dart';
 import 'package:xcross/src/flutter/errors.dart';
+import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
 
-/// Resolves Flutter iOS engine artifacts needed for a debug iOS bundle.
+/// Resolves Flutter iOS engine artifacts for the selected build mode.
 ///
 /// On macOS, `flutter precache --ios` downloads these into
 /// `bin/cache/artifacts/engine/ios/`. On Linux, Flutter skips iOS artifacts,
 /// so we fetch them ourselves from `storage.googleapis.com`. Missing artifacts
 /// are stored outside the Flutter SDK so read-only installations work.
 final class IosEngineCache {
-  IosEngineCache({required this.flutterRoot, String? cacheRoot})
-    : cacheRoot = cacheRoot ?? _defaultCacheRoot;
+  IosEngineCache({
+    required this.flutterRoot,
+    String? cacheRoot,
+    this.mode = FlutterBuildMode.debug,
+  }) : cacheRoot = cacheRoot ?? _defaultCacheRoot;
 
   final String flutterRoot;
   final String cacheRoot;
+  final FlutterBuildMode mode;
+  String get _iosLeaf =>
+      mode == FlutterBuildMode.release ? 'ios-release' : 'ios';
+  String get _patchedLeaf => mode == FlutterBuildMode.release
+      ? 'flutter_patched_sdk_product'
+      : 'flutter_patched_sdk';
 
   String get _flutterSdkEngineRoot =>
       p.join(flutterRoot, 'bin', 'cache', 'artifacts', 'engine');
@@ -28,13 +39,12 @@ final class IosEngineCache {
   String get _userEngineRoot =>
       p.join(cacheRoot, engineHash, 'artifacts', 'engine');
 
-  /// Directory containing the debug/JIT iOS engine artifacts.
+  /// Directory containing this mode's iOS engine artifacts.
   String get _engineDir {
-    final flutterSdkDirectory = p.join(_flutterSdkEngineRoot, 'ios');
-    final flutterFramework = p.join(flutterSdkDirectory, 'Flutter.xcframework');
-    if (Directory(flutterFramework).existsSync()) return flutterSdkDirectory;
+    final flutterSdkDirectory = p.join(_flutterSdkEngineRoot, _iosLeaf);
+    if (_validIosRoot(flutterSdkDirectory)) return flutterSdkDirectory;
 
-    return p.join(_userEngineRoot, 'ios');
+    return p.join(_userEngineRoot, _iosLeaf);
   }
 
   /// Flutter.xcframework inside [_engineDir].
@@ -85,18 +95,18 @@ final class IosEngineCache {
     return p.join(snapshotsDir, jitSnapshot);
   }
 
-  /// Patched SDK platform .dill — debug uses `flutter_patched_sdk/`.
+  /// Patched SDK platform .dill; release uses the product platform libraries.
   String get patchedSdkRoot {
     final flutterSdkDirectory = p.join(
       _flutterSdkEngineRoot,
       'common',
-      'flutter_patched_sdk',
+      _patchedLeaf,
     );
-    if (Directory(flutterSdkDirectory).existsSync()) {
+    if (_validPatchedSdk(flutterSdkDirectory)) {
       return flutterSdkDirectory;
     }
 
-    return p.join(_userEngineRoot, 'common', 'flutter_patched_sdk');
+    return p.join(_userEngineRoot, 'common', _patchedLeaf);
   }
 
   /// Reads the engine hash that pins the artifact set.
@@ -122,14 +132,15 @@ final class IosEngineCache {
   /// Verify required iOS engine artifacts are present, downloading each set
   /// from `storage.googleapis.com` if missing. Safe to call repeatedly.
   Future<void> ensureArtifactsAvailable() async {
-    if (!Directory(flutterXcframework).existsSync()) {
+    if (!_validIosRoot(_engineDir)) {
       await _downloadIosArtifacts();
     }
-    if (!File(vmSnapshotData).existsSync() ||
-        !File(isolateSnapshotData).existsSync()) {
+    if (mode == FlutterBuildMode.debug &&
+        (!File(vmSnapshotData).existsSync() ||
+            !File(isolateSnapshotData).existsSync())) {
       await _downloadHostArtifacts();
     }
-    if (!Directory(patchedSdkRoot).existsSync()) {
+    if (!_validPatchedSdk(patchedSdkRoot)) {
       await _downloadPatchedSdk();
     }
   }
@@ -144,18 +155,22 @@ final class IosEngineCache {
       _hostEngineDir,
       'host-artifacts-',
       label: 'Flutter host engine',
+      isComplete: (root) =>
+          _nonempty(p.join(root, 'vm_isolate_snapshot.bin')) &&
+          _nonempty(p.join(root, 'isolate_snapshot.bin')),
     );
   }
 
   Future<void> _downloadIosArtifacts() async {
     final hash = _readEngineHash();
-    final url = '$flutterArtifactBaseUrl/$hash/ios/artifacts.zip';
+    final url = '$flutterArtifactBaseUrl/$hash/$_iosLeaf/artifacts.zip';
     Log.logTrace('downloading Flutter iOS engine artifacts from $url');
     await _fetchAndExtract(
       url,
       _engineDir,
       'ios-artifacts-',
       label: 'Flutter iOS engine',
+      isComplete: _validIosRoot,
     );
   }
 
@@ -166,40 +181,83 @@ final class IosEngineCache {
     Log.logTrace('downloading Flutter patched SDK from $url');
     await _fetchAndExtract(
       url,
-      p.dirname(patchedSdkRoot),
+      patchedSdkRoot,
       'patched-sdk-',
       label: 'Flutter patched SDK',
+      archiveRoot: leaf,
+      isComplete: _validPatchedSdk,
     );
   }
 
-  /// Download [url] into a temp directory, extract into [destDir], then
-  /// delete the temp directory.
-  ///
-  /// Pure Dart — no `curl`/`unzip` subprocess. The download follows redirects
-  /// and retries transient failures; the archive package's posix-aware
-  /// extractor restores unix permissions (exec bits) and symlinks.
+  static bool _nonempty(String path) =>
+      File(path).existsSync() && File(path).lengthSync() > 0;
+  static bool _validPatchedSdk(String root) =>
+      _nonempty(p.join(root, 'platform_strong.dill')) &&
+      _nonempty(p.join(root, 'vm_outline_strong.dill'));
+  static bool _validIosRoot(String root) =>
+      _nonempty(p.join(root, 'Flutter.xcframework', 'Info.plist')) &&
+      _nonempty(
+        p.join(
+          root,
+          'Flutter.xcframework',
+          'ios-arm64',
+          'Flutter.framework',
+          'Info.plist',
+        ),
+      ) &&
+      _nonempty(
+        p.join(
+          root,
+          'Flutter.xcframework',
+          'ios-arm64',
+          'Flutter.framework',
+          'Flutter',
+        ),
+      );
+
+  /// Download and extract privately; publish only a complete artifact set.
+  /// Pure Dart extraction retains the archive's permissions and symlinks.
   static Future<void> _fetchAndExtract(
     String url,
     String destDir,
     String tmpPrefix, {
     required String label,
-  }) async {
-    await Directory(destDir).create(recursive: true);
-    final tmp = await Directory.systemTemp.createTemp(tmpPrefix);
-    final zipPath = p.join(tmp.path, 'artifacts.zip');
-    await Downloader.downloadToFile(
-      url,
-      File(zipPath),
-      maxAttempts: 5,
-      label: label,
-    );
-    // Unzipping hundreds of MB is slow enough to look like a hang on its own.
-    await Log.logStep(
-      'Extracting $label',
-      () => extractFileToDisk(zipPath, destDir),
-    );
-    await tmp.delete(recursive: true);
-  }
+    required bool Function(String) isComplete,
+    String? archiveRoot,
+  }) => ensureAtomicCache(
+    destination: destDir,
+    isComplete: isComplete,
+    populate: (stage) async {
+      final tmp = await Directory.systemTemp.createTemp(tmpPrefix);
+      try {
+        final zipPath = p.join(tmp.path, 'artifacts.zip');
+        await Downloader.downloadToFile(
+          url,
+          File(zipPath),
+          maxAttempts: 5,
+          label: label,
+        );
+        final extractRoot = archiveRoot == null
+            ? stage
+            : p.join(stage, '.extract');
+        await Log.logStep(
+          'Extracting $label',
+          () => extractFileToDisk(zipPath, extractRoot),
+        );
+        if (archiveRoot != null) {
+          final content = Directory(p.join(extractRoot, archiveRoot));
+          if (content.existsSync()) {
+            await for (final entity in content.list(followLinks: false)) {
+              await entity.rename(p.join(stage, p.basename(entity.path)));
+            }
+          }
+          await Directory(extractRoot).delete(recursive: true);
+        }
+      } finally {
+        await tmp.delete(recursive: true);
+      }
+    },
+  );
 
   /// Per-user directory for artifacts missing from the Flutter SDK.
   static String get _defaultCacheRoot {

@@ -276,10 +276,9 @@ final class RunnerShim {
 
   /// Minimal ObjC Runner that boots Flutter via FlutterAppDelegate.
   ///
-  /// When [hasPlugins] is false (the common, today's-behaviour case), this is
-  /// byte-identical to the original hardcoded template: a local, empty
-  /// `GeneratedPluginRegistrant` stub, so projects without Swift Package
-  /// Manager plugins are entirely unaffected.
+  /// When [hasPlugins] is false, uses a local, empty
+  /// `GeneratedPluginRegistrant` stub. Both variants share the same scene
+  /// startup behavior.
   ///
   /// When [hasPlugins] is true, the local stub is replaced by a plain
   /// `extern` forward declaration of the `@_cdecl`-exported registrant
@@ -320,12 +319,29 @@ ${hasPlugins ? _pluginsExternDeclaration : _emptyPluginRegistrantStub}
 - (void)scene:(UIScene*)scene willConnectToSession:(UISceneSession*)session options:(UISceneConnectionOptions*)connectionOptions {
   if (![scene isKindOfClass:[UIWindowScene class]]) return;
   UIWindowScene* windowScene = (UIWindowScene*)scene;
-  FlutterViewController* flutterViewController = [[FlutterViewController alloc] initWithProject:nil nibName:nil bundle:nil];
-  [flutterViewController setFlutterViewDidRenderCallback:^{
-    NSLog(@"[xcross] first Flutter frame rendered");
-  }];
-  UIWindow* window = [[UIWindow alloc] initWithWindowScene:windowScene];
-  window.rootViewController = flutterViewController;
+  // UIKit may already have created this window from UISceneStoryboardFile.
+  // Keep that controller tree, including the application's native layout.
+  UIWindow* window = self.window;
+  UIViewController* rootController = window.rootViewController;
+  if (!rootController) {
+    UIStoryboard* storyboard = session.configuration.storyboard;
+    if (!storyboard) {
+      NSString* name = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"UIMainStoryboardFile"];
+      if (name.length) storyboard = [UIStoryboard storyboardWithName:name bundle:nil];
+    }
+    rootController = storyboard ? [storyboard instantiateInitialViewController]
+      : [[FlutterViewController alloc] initWithProject:nil nibName:nil bundle:nil];
+    if (!rootController) {
+      [NSException raise:@"XcrossStoryboardError" format:@"Main storyboard has no initial controller"];
+    }
+    window = [[UIWindow alloc] initWithWindowScene:windowScene];
+    window.rootViewController = rootController;
+  }
+  if ([rootController isKindOfClass:[FlutterViewController class]]) {
+    [(FlutterViewController*)rootController setFlutterViewDidRenderCallback:^{
+      NSLog(@"[xcross] first Flutter frame rendered");
+    }];
+  }
   self.window = window;
   [window makeKeyAndVisible];
   [super scene:scene willConnectToSession:session options:connectionOptions];
@@ -337,7 +353,7 @@ int main(int argc, char * argv[]) {
 }
 ''';
 
-  /// Empty registrant stub — today's behaviour, used when there are no Swift
+  /// Empty registrant stub, used when there are no Swift
   /// Package Manager plugins to register.
   static const _emptyPluginRegistrantStub = '''
 @interface GeneratedPluginRegistrant : NSObject

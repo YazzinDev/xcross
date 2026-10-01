@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:propertylistserialization/propertylistserialization.dart';
 import 'package:xcross/src/cli/basic/sdk_install.dart';
 import 'package:xcross/src/flutter/build/internal/host_symlink_capability.dart';
+import 'package:xcross/src/flutter/build/internal/ios_dsym.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
 import 'package:xcross/src/flutter/build/internal/windows_swift_plan_repair.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
@@ -23,6 +24,7 @@ import 'package:xcross/src/flutter/build/swiftpm_binary_artifact_store.dart';
 import 'package:xcross/src/flutter/build/swiftpm_binary_target.dart';
 import 'package:xcross/src/flutter/constants.dart';
 import 'package:xcross/src/flutter/errors.dart';
+import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
 
 /// Name of the synthetic package/product/binary-target that wraps the real
 /// `Flutter.xcframework` as a SwiftPM binary target (SwiftPM binary-target
@@ -108,6 +110,7 @@ final class GeneratedPluginsBuildResult {
     required this.libraryPath,
     required this.dylibPaths,
     required this.modulesDir,
+    this.resourceBundles = const [],
   });
 
   /// Absolute path to the built `libFlutterPluginsGenerated.dylib`.
@@ -115,6 +118,9 @@ final class GeneratedPluginsBuildResult {
 
   /// Absolute paths to every dynamic library produced by SwiftPM.
   final List<String> dylibPaths;
+
+  /// SwiftPM resource bundles to embed at the application bundle root.
+  final List<String> resourceBundles;
 
   /// Absolute path to SwiftPM's `Modules` directory holding the built
   /// `.swiftmodule` files, or null when SwiftPM did not emit one. App
@@ -154,6 +160,7 @@ abstract final class GeneratedPluginsPackage {
     required String flutterXcframework,
     required IosDeploymentTarget deploymentTarget,
     bool verbose = false,
+    FlutterBuildMode mode = FlutterBuildMode.debug,
     String? toolchainIdentity,
     String? sdkIdentity,
     bool swiftPmArtifactJunctionCapability = false,
@@ -186,16 +193,17 @@ abstract final class GeneratedPluginsPackage {
           'spmPlugins=${[for (final plugin in spmPlugins) plugin.name]}',
         );
 
-        final targetDebugDir = p.join(
+        final targetOutputDir = p.join(
           workspace.scratch,
           'arm64-apple-ios',
-          'debug',
+          mode.name,
         );
         final fingerprint = await incrementalBuildFingerprint(
           plugins: spmPlugins,
           flutterXcframework: flutterXcframework,
           deploymentTarget: deploymentTarget,
           verbose: verbose,
+          mode: mode,
           toolchainIdentity: toolchainIdentity,
           sdkIdentity: sdkIdentity,
         );
@@ -205,12 +213,12 @@ abstract final class GeneratedPluginsPackage {
         if (fingerprintFile.existsSync() &&
             await fingerprintFile.readAsString() == fingerprint &&
             File(
-              p.join(targetDebugDir, 'lib$_pluginsProductName.dylib'),
+              p.join(targetOutputDir, 'lib$_pluginsProductName.dylib'),
             ).existsSync()) {
           Log.logTrace('reusing unchanged SwiftPM plugin build');
-          return discoverAndRewriteDylibs(targetDebugDir);
+          return discoverAndRewriteDylibs(targetOutputDir, mode: mode);
         }
-        final targetDirectory = Directory(targetDebugDir);
+        final targetDirectory = Directory(targetOutputDir);
         if (targetDirectory.existsSync()) {
           await targetDirectory.delete(recursive: true);
         }
@@ -258,6 +266,7 @@ abstract final class GeneratedPluginsPackage {
           'Flutter.xcframework',
         );
         await _runSwiftBuild(
+          mode: mode,
           workspace: workspace,
           pluginsDir: pluginsDir,
           scratchPath: scratchPath,
@@ -279,7 +288,10 @@ abstract final class GeneratedPluginsPackage {
               capabilities.packageLocalArtifact,
         );
 
-        final result = await discoverAndRewriteDylibs(targetDebugDir);
+        final result = await discoverAndRewriteDylibs(
+          targetOutputDir,
+          mode: mode,
+        );
         await _writeStable(fingerprintFile.path, fingerprint);
         return result;
       });
@@ -290,6 +302,7 @@ abstract final class GeneratedPluginsPackage {
     required String flutterXcframework,
     required IosDeploymentTarget deploymentTarget,
     required bool verbose,
+    FlutterBuildMode mode = FlutterBuildMode.debug,
     String? toolchainIdentity,
     String? sdkIdentity,
   }) async {
@@ -305,7 +318,8 @@ abstract final class GeneratedPluginsPackage {
 
     // v7 invalidated dylibs compiled with availability guards disabled; v8
     // invalidates staged sources compiled before State-wrapper recovery.
-    add('xcross-swiftpm-build-v8-state-wrapper-recovery');
+    add('xcross-swiftpm-build-v9-release-resources');
+    add(mode.name);
     add(objectiveCLinkerSwiftDriverArguments.join('\u0001'));
     if (Platform.isLinux) {
       add(objectiveCSmallStubSwiftDriverArguments.join('\u0001'));
@@ -393,6 +407,7 @@ abstract final class GeneratedPluginsPackage {
 
   /// `swift build --swift-sdk arm64-apple-ios`.
   static Future<void> _runSwiftBuild({
+    required FlutterBuildMode mode,
     required SwiftPmWorkspace workspace,
     required String pluginsDir,
     required String scratchPath,
@@ -481,6 +496,7 @@ abstract final class GeneratedPluginsPackage {
       );
     }
     final baseArguments = swiftBuildArguments(
+      mode: mode,
       pluginsDir: pluginsDir,
       scratchPath: scratchPath,
       swiftSdksPath: swiftSdksPath,
@@ -502,7 +518,10 @@ abstract final class GeneratedPluginsPackage {
       ),
     );
     // Inspect the plan just emitted, not a directory from an earlier build.
-    final targetBuildDir = resolveTargetBuildDir(scratchPath);
+    final targetBuildDir = resolveTargetBuildDir(
+      scratchPath,
+      configuration: mode.name,
+    );
     await repairWindowsGeneratedBuildFiles(
       scratchPath,
       targetBuildDir,
@@ -511,7 +530,7 @@ abstract final class GeneratedPluginsPackage {
     final interopArguments = plannedSwiftInteropSearchPaths(targetBuildDir);
     // The first plan run could not carry [interopArguments], because the
     // paths it discovers are read out of the plan it produces. SwiftPM
-    // records the resulting command lines in `debug.yaml` and llbuild
+    // records the resulting command lines in the configuration's YAML plan and llbuild
     // replays them verbatim, so without a second plan run every compile
     // would execute with the pre-interop arguments no matter what this
     // build passes. Re-planning rewrites the manifest with the search
@@ -523,7 +542,11 @@ abstract final class GeneratedPluginsPackage {
     // examples/flutter_example) on every build including incremental ones,
     // to reproduce a manifest that is already byte-identical.
     if (interopArguments.isNotEmpty &&
-        !manifestCarriesInteropSearchPaths(scratchPath, interopArguments)) {
+        !manifestCarriesInteropSearchPaths(
+          scratchPath,
+          interopArguments,
+          configuration: mode.name,
+        )) {
       await buildTranslatingSdkMismatch(
         () => ProcessRunner.runChecked(
           swiftBuild,
@@ -2153,9 +2176,10 @@ abstract final class GeneratedPluginsPackage {
   @visibleForTesting
   static bool manifestCarriesInteropSearchPaths(
     String scratchPath,
-    List<String> interopArguments,
-  ) {
-    final manifest = File(p.join(scratchPath, 'debug.yaml'));
+    List<String> interopArguments, {
+    String configuration = 'debug',
+  }) {
+    final manifest = File(p.join(scratchPath, '$configuration.yaml'));
     final String text;
     try {
       text = manifest.readAsStringSync();
@@ -2255,6 +2279,7 @@ abstract final class GeneratedPluginsPackage {
     required String swiftSdksPath,
     required String iosSdk,
     required String flutterFrameworkSlice,
+    FlutterBuildMode mode = FlutterBuildMode.debug,
     String? objectiveCCompatibilityHeader,
     String? toolsetPath,
     String? linkerPath,
@@ -2274,15 +2299,16 @@ abstract final class GeneratedPluginsPackage {
     '--build-system',
     'native',
     '--configuration',
-    'debug',
+    mode.name,
     // A debug build with DWARF makes swift-driver plan a dSYM job for Darwin
     // targets, and that job needs a `dsymutil` no cross host is guaranteed to
     // have ("error: unableToFind(tool: \"dsymutil\")" on Linux). Nothing here
     // consumes a dSYM — only the dylibs are collected — and the Runner is
     // compiled without debug info too, so drop it instead of adding a tool
-    // requirement.
+    // requirement for debug. Release emits real DWARF and requires LLVM's
+    // dsymutil in the selected toolchain.
     '-debug-info-format',
-    'none',
+    if (mode == FlutterBuildMode.release) 'dwarf' else 'none',
     '--swift-sdks-path',
     swiftSdksPath,
     '--swift-sdk',
@@ -2295,7 +2321,7 @@ abstract final class GeneratedPluginsPackage {
       '--disable-automatic-resolution',
       // Windows Swift's interface verifier does not inherit SwiftPM's search
       // path for generated sibling Clang modules during Darwin cross builds.
-      // The binary module is still emitted and used by this debug build.
+      // The binary module is still emitted and used by this build.
       '-Xswiftc',
       '-no-verify-emitted-module-interface',
       // Clang guards implicit module builds with filesystem lock files so
@@ -2373,15 +2399,19 @@ abstract final class GeneratedPluginsPackage {
     ],
   ];
 
-  /// Finds and fixes every dylib emitted into SwiftPM's target debug output.
+  /// Finds and fixes every dylib emitted into SwiftPM's target output.
   @visibleForTesting
   static Future<GeneratedPluginsBuildResult> discoverAndRewriteDylibs(
-    String targetDebugDir,
-  ) async {
+    String targetOutputDir, {
+    FlutterBuildMode mode = FlutterBuildMode.debug,
+  }) async {
     final dylibPaths = <String>[];
-    await for (final entity in Directory(targetDebugDir).list()) {
+    final resourceBundles = <String>[];
+    await for (final entity in Directory(targetOutputDir).list()) {
       if (entity is File && p.extension(entity.path) == '.dylib') {
         dylibPaths.add(p.absolute(entity.path));
+      } else if (entity is Directory && p.extension(entity.path) == '.bundle') {
+        resourceBundles.add(p.absolute(entity.path));
       }
     }
     dylibPaths.sort();
@@ -2393,12 +2423,15 @@ abstract final class GeneratedPluginsPackage {
     if (aggregatePath == null) {
       throw FlutterBuildError(
         'GeneratedPluginsPackage: swift build did not produce the plugins '
-        'library in $targetDebugDir',
+        'library in $targetOutputDir',
       );
     }
 
     final dylibNames = dylibPaths.map(p.basename).toSet();
     for (final path in dylibPaths) {
+      if (mode == FlutterBuildMode.release) {
+        await verifyIosDsym(path, '$path.dSYM');
+      }
       await MachODylibRewriter.rewriteFile(
         path,
         producedDylibNames: dylibNames,
@@ -2407,10 +2440,11 @@ abstract final class GeneratedPluginsPackage {
     }
     // SwiftPM emits .swiftmodule files into a sibling `Modules` directory;
     // app-extension targets importing a plugin need it on their include path.
-    final modules = Directory(p.join(targetDebugDir, 'Modules'));
+    final modules = Directory(p.join(targetOutputDir, 'Modules'));
     return GeneratedPluginsBuildResult(
       libraryPath: aggregatePath,
       dylibPaths: List.unmodifiable(dylibPaths),
+      resourceBundles: List.unmodifiable(resourceBundles..sort()),
       modulesDir: modules.existsSync() ? p.absolute(modules.path) : null,
     );
   }

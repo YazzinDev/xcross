@@ -1,0 +1,8 @@
+name: xcross_ios_aot_probe
+description: Minimal physical-device fixture for Windows and Linux iOS AOT validation.
+publish_to: none
+environment:
+  sdk: '>=3.13.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter

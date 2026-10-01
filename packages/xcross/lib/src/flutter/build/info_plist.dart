@@ -5,6 +5,7 @@ import 'package:xcross/src/flutter/build/internal/required_plist_key.dart';
 import 'package:xcross/src/flutter/build/internal/xcconfig_resolver.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
 import 'package:xcross/src/flutter/constants.dart';
+import 'package:xcross/src/flutter/errors.dart';
 import 'package:xml/xml.dart';
 
 /// Plist / xcconfig text manipulation for the generated app bundle.
@@ -345,8 +346,44 @@ abstract final class InfoPlist {
     return xml + fragment;
   }
 
+  /// Require authored storyboard references to have compiled bundle resources.
+  /// Missing resources are errors, never an implicit programmatic replacement.
+  static void validateStoryboardReferences(String xml, String bundleDir) {
+    final directories = <String>[
+      bundleDir,
+      ...Directory(bundleDir)
+          .listSync()
+          .whereType<Directory>()
+          .where((directory) => p.extension(directory.path) == '.lproj')
+          .map((directory) => directory.path),
+    ];
+    for (final pattern in [
+      _uiMainStoryboardPattern,
+      _uiLaunchStoryboardPattern,
+      _uiSceneStoryboardPattern,
+    ]) {
+      for (final match in pattern.allMatches(xml)) {
+        final name = match.group(1)!;
+        if (p.isAbsolute(name) ||
+            name.split(RegExp(r'[/\\]')).contains('..') ||
+            !directories.any(
+              (directory) => File(
+                p.join(directory, '$name.storyboardc', 'Info.plist'),
+              ).existsSync(),
+            )) {
+          throw FlutterBuildError(
+            'Info.plist references missing compiled storyboard '
+            '"$name" in $bundleDir. Declare its source in the application resource '
+            'build phase; xcross will not replace the storyboard.',
+          );
+        }
+      }
+    }
+  }
+
   /// Remove references to storyboards not present (compiled) in [bundleDir].
-  /// xcross doesn't run `ibtool`, so missing storyboards would crash at launch.
+  /// Missing compiled storyboards would crash at launch. Used for projects that
+  /// do not declare those resources; declared sources are compiled while staging.
   static String stripUnsatisfiableStoryboards(String xml, String bundleDir) {
     bool hasCompiled(String name) =>
         Directory(p.join(bundleDir, '$name.storyboardc')).existsSync();
@@ -377,9 +414,61 @@ abstract final class InfoPlist {
   }
 
   static String applySceneLifecycle(String xml) {
+    // UIKit must retain the project's storyboard when installing xcross's
+    // SceneDelegate. Replacing the role wholesale used to discard this key.
+    const applicationRoleKey = '<key>UIWindowSceneSessionRoleApplication</key>';
+    final applicationRoleStart = xml.indexOf(applicationRoleKey);
+    final applicationRole = applicationRoleStart < 0
+        ? null
+        : _containerAfterKey(
+            xml,
+            applicationRoleStart,
+            applicationRoleKey,
+            'array',
+          );
+    final roleXml = applicationRole == null
+        ? ''
+        : xml.substring(applicationRole.start, applicationRole.end);
+    // Do not mistake an external-display storyboard for the application entry.
+    final storyboard =
+        _uiSceneStoryboardPattern.firstMatch(roleXml)?.group(1) ??
+        _uiMainStoryboardPattern.firstMatch(xml)?.group(1);
+    if (applicationRole != null && roleXml.contains('UISceneStoryboardFile')) {
+      final array = XmlDocument.parse(roleXml).rootElement;
+      for (final configuration in array.findElements('dict')) {
+        final delegate = _plistValueFor(
+          configuration,
+          'UISceneDelegateClassName',
+        );
+        if (delegate == null) {
+          configuration.children.addAll([
+            _plistElement('key', 'UISceneDelegateClassName'),
+            _plistElement('string', 'SceneDelegate'),
+          ]);
+        } else {
+          delegate.replace(_plistElement('string', 'SceneDelegate'));
+        }
+      }
+      return xml.replaceRange(
+        applicationRole.start,
+        applicationRole.end,
+        array.toXmlString(),
+      );
+    }
+    final applicationSceneConfiguration = storyboard == null
+        ? _applicationSceneConfiguration
+        : _applicationSceneConfiguration.replaceFirst(
+            '<key>UISceneClassName</key>',
+            '<key>UISceneStoryboardFile</key><string>$storyboard</string>\n'
+                '\t\t\t\t\t<key>UISceneClassName</key>',
+          );
+    final sceneManifest = _sceneManifest.replaceFirst(
+      _applicationSceneConfiguration,
+      applicationSceneConfiguration,
+    );
     const manifestKey = '<key>UIApplicationSceneManifest</key>';
     final manifestKeyStart = xml.indexOf(manifestKey);
-    if (manifestKeyStart < 0) return _insertBeforeEnd(xml, _sceneManifest);
+    if (manifestKeyStart < 0) return _insertBeforeEnd(xml, sceneManifest);
 
     final manifest = _containerAfterKey(
       xml,
@@ -392,7 +481,7 @@ abstract final class InfoPlist {
       return xml.replaceRange(
         manifestKeyStart,
         manifest.end,
-        _sceneManifest.trimRight(),
+        sceneManifest.trimRight(),
       );
     }
 
@@ -404,7 +493,7 @@ abstract final class InfoPlist {
         return xml.replaceRange(
           roleKeyStart,
           role.end,
-          _applicationSceneConfiguration.trim(),
+          applicationSceneConfiguration.trim(),
         );
       }
     }
@@ -426,13 +515,13 @@ abstract final class InfoPlist {
           return xml.replaceRange(
             configurations.start,
             configurations.end,
-            '<dict>\n$_applicationSceneConfiguration\t\t</dict>',
+            '<dict>\n$applicationSceneConfiguration\t\t</dict>',
           );
         }
         return xml.replaceRange(
           configurations.end - '</dict>'.length,
           configurations.end - '</dict>'.length,
-          _applicationSceneConfiguration,
+          applicationSceneConfiguration,
         );
       }
     }
@@ -442,9 +531,38 @@ abstract final class InfoPlist {
       manifest.end - '</dict>'.length,
       '\t\t<key>UISceneConfigurations</key>\n'
       '\t\t<dict>\n'
-      '$_applicationSceneConfiguration'
+      '$applicationSceneConfiguration'
       '\t\t</dict>\n',
     );
+  }
+
+  /// Merge actool-style generated icon metadata without losing unrelated keys.
+  static String mergeAssetMetadata(String xml, String metadata) {
+    final document = XmlDocument.parse(xml);
+    final dictionary = document.rootElement.getElement('dict')!;
+    final additions = XmlDocument.parse(
+      metadata,
+    ).rootElement.getElement('dict')!;
+    final elements = additions.childElements.toList();
+    for (var i = 0; i + 1 < elements.length; i += 2) {
+      final name = elements[i].innerText;
+      if (!{
+        'CFBundleIconName',
+        'CFBundleIconFiles',
+        'CFBundleIcons',
+        'CFBundleIcons~ipad',
+      }.contains(name)) {
+        throw FormatException('Unexpected catalog metadata key: $name');
+      }
+      for (final key in dictionary.findElements('key').toList()) {
+        if (key.innerText != name) continue;
+        final value = key.nextElementSibling;
+        value?.remove();
+        key.remove();
+      }
+      dictionary.children.addAll([elements[i].copy(), elements[i + 1].copy()]);
+    }
+    return document.toXmlString();
   }
 
   static ({int start, int end, bool selfClosing})? _containerAfterKey(

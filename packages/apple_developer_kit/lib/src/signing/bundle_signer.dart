@@ -28,11 +28,12 @@ const _forbiddenDirectoryNames = {
 
 /// Bundle suffixes that carry their own signature. `.framework` and `.appex`
 /// are the nested bundle kinds xcross knows how to sign.
+/// A data-only `.bundle` is sealed as ordinary resources. The executable-plist
+/// and Mach-O checks below still reject unsupported code hidden inside it.
 const _unsupportedBundleSuffixes = {
   '.app',
   '.xctest',
   '.xpc',
-  '.bundle',
   '.plugin',
   '.xcframework',
 };

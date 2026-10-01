@@ -3,6 +3,21 @@ import 'package:xcross/src/device/core_device_launch_profile.dart';
 import 'package:xcross/src/flutter/flutter.dart';
 
 void main() {
+  test('release never requests debugger or VM flags, including under DAP', () {
+    const profile = CoreDeviceLaunchProfile.flutterRelease(
+      arguments: ['--route=/probe'],
+    );
+    expect(profile.attachDebugger, isFalse);
+    expect(profile.hotReload, isNull);
+    expect(profile.argumentsForLaunch(isDap: true, ipv6VmService: true), [
+      '--route=/probe',
+    ]);
+    expect(const CoreDeviceLaunchProfile.native().attachDebugger, isTrue);
+    expect(
+      const CoreDeviceLaunchProfile.flutter(hotReload: null).attachDebugger,
+      isTrue,
+    );
+  });
   test('native profile forwards only application arguments', () {
     const profile = CoreDeviceLaunchProfile.native(arguments: ['--demo']);
     expect(profile.argumentsForLaunch(isDap: false), ['--demo']);

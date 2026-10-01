@@ -5,6 +5,32 @@ import 'package:test/test.dart';
 import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
 
 void main() {
+  test('obfuscation requires release and retained symbol output', () async {
+    Future<FlutterBuildOptions> resolve(
+      FlutterBuildMode mode,
+      String? symbols,
+    ) => FlutterBuildOptions.resolve(
+      target: 'lib/main.dart',
+      dartDefine: [],
+      dartDefineFromFile: [],
+      pub: false,
+      mode: mode,
+      obfuscate: true,
+      splitDebugInfo: symbols,
+    );
+    await expectLater(
+      resolve(FlutterBuildMode.debug, 'symbols'),
+      throwsA(anything),
+    );
+    await expectLater(
+      resolve(FlutterBuildMode.release, null),
+      throwsA(anything),
+    );
+    await expectLater(resolve(FlutterBuildMode.release, ''), throwsA(anything));
+    final options = await resolve(FlutterBuildMode.release, 'symbols');
+    expect(options.obfuscate, isTrue);
+    expect(options.splitDebugInfo, 'symbols');
+  });
   group('FlutterBuildOptions.resolve', () {
     late Directory tmp;
 

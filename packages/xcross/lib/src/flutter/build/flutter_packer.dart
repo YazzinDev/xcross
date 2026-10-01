@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:xcross/src/flutter/build/app_extension_builder.dart';
 import 'package:xcross/src/flutter/build/flutter_debug_bundler.dart';
 import 'package:xcross/src/flutter/build/flutter_notice_artifact.dart';
+import 'package:xcross/src/flutter/build/flutter_release_bundler.dart';
 import 'package:xcross/src/flutter/build/info_plist.dart';
 import 'package:xcross/src/flutter/build/internal/native_asset_linkage.dart';
 import 'package:xcross/src/flutter/build/internal/recursive_directory_copy.dart';
@@ -32,10 +33,10 @@ import 'package:xcross/src/package_config_resolver.dart';
 /// Builds a Flutter iOS `.app` bundle using Dart and xcross's cross-platform
 /// toolchain. Does NOT call `xcrun`.
 ///
-/// Pipeline (debug/JIT only — xcross does not support release/AOT):
+/// Pipeline:
 ///   1. Resolve `FLUTTER_ROOT` and run `flutter pub get`.
-///   2. Build `App.framework` via [FlutterDebugBundler] (frontend_server
-///      one-shot + clang stub dylib + ld64.lld from PATH).
+///   2. Build `App.framework` via [FlutterDebugBundler] (JIT) or
+///      [FlutterReleaseBundler] (product kernel + native iOS AOT cross-compiler).
 ///   3. Run Dart build hooks and package their native asset frameworks.
 ///   4. Discover iOS plugins and build the aggregate Swift Package Manager
 ///      plugins library via [GeneratedPluginsPackage], if any exist.
@@ -78,6 +79,8 @@ final class FlutterPacker {
   final String projectRoot;
   final String bundleId;
   final FlutterBuildOptions options;
+  bool get _release => options.mode == FlutterBuildMode.release;
+  String get _modeSuffix => _release ? '-release' : '';
   final bool swiftPmArtifactJunctionCapability;
   final bool packageLocalArtifactJunctionCapability;
   final ArtifactJunctionCapabilityResolver? artifactJunctionCapabilityResolver;
@@ -121,28 +124,54 @@ final class FlutterPacker {
     final deploymentTarget = IosDeploymentTarget.resolve(projectRoot);
     Log.logTrace('iOS deployment target: ${deploymentTarget.version}');
 
-    final appFramework = await _buildAppFramework(
+    await validateIosResourceSources(projectRoot);
+
+    if (_release) {
+      validateReleasePlugins(await PluginDiscovery.discover(projectRoot));
+      if (IosAppExtensions.discover(projectRoot).isNotEmpty) {
+        throw FlutterBuildError(
+          'Release app extensions have not been validated yet.',
+        );
+      }
+    }
+
+    final appBuild = await _buildAppFramework(
       flutterRoot,
       deploymentTarget: deploymentTarget,
     );
-    final nativeAssets = await Log.logStep(
-      'Building native assets',
-      () => IosNativeAssetsBuilder(
-        projectRoot: projectRoot,
-        flutterRoot: flutterRoot,
-        deploymentTarget: deploymentTarget,
-        entrypoint: options.target,
-        dartDefines: options.dartDefines,
-        flavor: options.flavor,
-      ).build(),
-    );
-    copyFlutterNoticeArtifact(
-      sourceFlutterAssetsDirectory: p.dirname(nativeAssets.manifestPath),
-      destinationFlutterAssetsDirectory: p.join(appFramework, 'flutter_assets'),
-    );
-    await File(
-      nativeAssets.manifestPath,
-    ).copy(p.join(appFramework, 'flutter_assets', 'NativeAssetsManifest.json'));
+    final appFramework = appBuild.framework;
+    final nativeAssets = _release
+        ? IosNativeAssetsBuildResult(
+            manifestPath: p.join(
+              appFramework,
+              'flutter_assets',
+              'NativeAssetsManifest.json',
+            ),
+            frameworks: appBuild.nativeFrameworks,
+          )
+        : await Log.logStep(
+            'Building native assets',
+            () => IosNativeAssetsBuilder(
+              projectRoot: projectRoot,
+              flutterRoot: flutterRoot,
+              deploymentTarget: deploymentTarget,
+              entrypoint: options.target,
+              dartDefines: options.dartDefines,
+              flavor: options.flavor,
+            ).build(),
+          );
+    if (!_release) {
+      copyFlutterNoticeArtifact(
+        sourceFlutterAssetsDirectory: p.dirname(nativeAssets.manifestPath),
+        destinationFlutterAssetsDirectory: p.join(
+          appFramework,
+          'flutter_assets',
+        ),
+      );
+      await File(nativeAssets.manifestPath).copy(
+        p.join(appFramework, 'flutter_assets', 'NativeAssetsManifest.json'),
+      );
+    }
     final pluginsBuild = await _buildPlugins(
       flutterRoot,
       deploymentTarget: deploymentTarget,
@@ -176,6 +205,7 @@ final class FlutterPacker {
       runnerBinary: runnerResult.runnerBinary,
       sdkName: runnerResult.sdkName,
       pluginLibraries: pluginsBuild?.dylibPaths ?? const [],
+      pluginResourceBundles: pluginsBuild?.resourceBundles ?? const [],
       nativeAssetFrameworks: nativeAssets.frameworks,
       deploymentTarget: deploymentTarget,
       extensions: extensions,
@@ -280,18 +310,28 @@ final class FlutterPacker {
     });
   }
 
-  /// Build `App.framework` via [FlutterDebugBundler].
+  /// Build `App.framework` with the mode's dedicated compiler pipeline.
   /// Returns the framework directory path.
-  Future<String> _buildAppFramework(
+  Future<({String framework, List<String> nativeFrameworks})>
+  _buildAppFramework(
     String flutterRoot, {
     required IosDeploymentTarget deploymentTarget,
   }) async {
+    if (_release) {
+      return FlutterReleaseBundler(
+        projectRoot: projectRoot,
+        flutterRoot: flutterRoot,
+        outputDir: p.join(projectRoot, 'build', 'xcross-flutter-release'),
+        deploymentTarget: deploymentTarget,
+        options: options,
+      ).build();
+    }
     final assembleOut = p.join(projectRoot, 'build', 'xcross-flutter-debug');
     final assembleDir = Directory(assembleOut);
     if (assembleDir.existsSync()) await assembleDir.delete(recursive: true);
     await assembleDir.create(recursive: true);
 
-    return FlutterDebugBundler(
+    final framework = await FlutterDebugBundler(
       projectRoot: projectRoot,
       flutterRoot: flutterRoot,
       outputDir: assembleOut,
@@ -300,6 +340,7 @@ final class FlutterPacker {
       dartDefines: options.dartDefines,
       flavor: options.flavor,
     ).build();
+    return (framework: framework, nativeFrameworks: const <String>[]);
   }
 
   /// Discover the project's iOS plugins and build the aggregate Swift
@@ -308,7 +349,7 @@ final class FlutterPacker {
   /// Returns the built dylibs, or null when there's nothing to build — no
   /// plugins at all, or only CocoaPods-only ones xcross doesn't support (a
   /// warning is logged for those; matching Flutter's own tool, this doesn't
-  /// fail the build).
+  /// fail a debug build). Release rejects unsupported native plugins up front.
   Future<GeneratedPluginsBuildResult?> _buildPlugins(
     String flutterRoot, {
     required IosDeploymentTarget deploymentTarget,
@@ -345,6 +386,7 @@ final class FlutterPacker {
 
     final xcframework = IosEngineCache(
       flutterRoot: flutterRoot,
+      mode: options.mode,
     ).flutterXcframework;
     final capabilities =
         await artifactJunctionCapabilityResolver?.call() ??
@@ -353,8 +395,12 @@ final class FlutterPacker {
           packageLocalArtifact: packageLocalArtifactJunctionCapability,
         );
 
-    final workspace = SwiftPmWorkspace.forProject(projectRoot);
+    final workspace = SwiftPmWorkspace.forProject(
+      projectRoot,
+      mode: options.mode,
+    );
     return GeneratedPluginsPackage.build(
+      mode: options.mode,
       projectRoot: projectRoot,
       workspace: workspace,
       plugins: spmPlugins,
@@ -364,6 +410,21 @@ final class FlutterPacker {
       swiftPmArtifactJunctionCapability: capabilities.swiftPmArtifact,
       packageLocalArtifactJunctionCapability: capabilities.packageLocalArtifact,
     );
+  }
+
+  /// Refuse incomplete release bundles before running any compiler.
+  @visibleForTesting
+  static void validateReleasePlugins(Iterable<IosPlugin> plugins) {
+    for (final plugin in plugins) {
+      if (!plugin.usesSwiftPackageManager &&
+          (plugin.usesCocoaPods || plugin.declaresNativeIosCode)) {
+        throw FlutterBuildError(
+          'Release plugin "${plugin.name}" requires '
+          '${plugin.platformDirectoryName}/${plugin.name}/Package.swift. '
+          'CocoaPods-only or missing native packages are not supported.',
+        );
+      }
+    }
   }
 
   /// Build the project's iOS app extensions (share/action extensions), if any.
@@ -395,7 +456,11 @@ final class FlutterPacker {
       projectRoot: projectRoot,
       extensions: buildable,
       deploymentTarget: deploymentTarget,
-      outputDir: p.join(projectRoot, 'build', 'xcross-flutter-extensions'),
+      outputDir: p.join(
+        projectRoot,
+        'build',
+        'xcross-flutter-extensions$_modeSuffix',
+      ),
       versions: _versions,
       flutterXcframework: flutterXcframework,
       pluginsLibrary: pluginsBuild?.libraryPath,
@@ -414,6 +479,7 @@ final class FlutterPacker {
   }) async {
     final xcframework = IosEngineCache(
       flutterRoot: flutterRoot,
+      mode: options.mode,
     ).flutterXcframework;
 
     final darwin = DarwinSdk.current();
@@ -428,7 +494,11 @@ final class FlutterPacker {
       projectRoot: projectRoot,
       sdk: darwin,
       flutterXcframework: xcframework,
-      outputDir: p.join(projectRoot, 'build', 'xcross-flutter-runner-bin'),
+      outputDir: p.join(
+        projectRoot,
+        'build',
+        'xcross-flutter-runner-bin$_modeSuffix',
+      ),
       deploymentTarget: deploymentTarget,
       pluginsLibrary: pluginsLibrary,
       nativeAssetFrameworks: nativeAssetFrameworks,
@@ -450,34 +520,46 @@ final class FlutterPacker {
     required String runnerBinary,
     required String sdkName,
     required List<String> pluginLibraries,
+    required List<String> pluginResourceBundles,
     required List<String> nativeAssetFrameworks,
     required IosDeploymentTarget deploymentTarget,
     required List<BuiltAppExtension> extensions,
   }) async {
-    // Stage in a temp dir so the destination is only touched once everything
-    // is in place.
-    final tmp = await Directory.systemTemp.createTemp('${appName}_app_bundle-');
-
-    await _stageBundle(
-      bundleDir: tmp.path,
-      appFramework: appFramework,
-      flutterFramework: p.join(xcframework, 'ios-arm64', 'Flutter.framework'),
-      runnerBinary: runnerBinary,
-      sdkName: sdkName,
-      pluginLibraries: pluginLibraries,
-      nativeAssetFrameworks: nativeAssetFrameworks,
-      deploymentTarget: deploymentTarget,
-      extensions: extensions,
+    final parent = Directory(
+      p.join(projectRoot, 'build', options.mode.bundleDirectory),
     );
-
-    final dest = p.join(projectRoot, 'build', 'xcross-ios', '$appName.app');
-    final destDir = Directory(dest);
-    if (destDir.existsSync()) {
-      await destDir.delete(recursive: true);
+    await parent.create(recursive: true);
+    final tmp = await parent.createTemp('.$appName-stage-');
+    final dest = p.join(parent.path, '$appName.app');
+    final backup = '${tmp.path}.previous';
+    var preserved = false;
+    try {
+      await _stageBundle(
+        bundleDir: tmp.path,
+        appFramework: appFramework,
+        flutterFramework: p.join(xcframework, 'ios-arm64', 'Flutter.framework'),
+        runnerBinary: runnerBinary,
+        sdkName: sdkName,
+        pluginLibraries: pluginLibraries,
+        pluginResourceBundles: pluginResourceBundles,
+        nativeAssetFrameworks: nativeAssetFrameworks,
+        deploymentTarget: deploymentTarget,
+        extensions: extensions,
+      );
+      if (Directory(dest).existsSync()) {
+        await Directory(dest).rename(backup);
+        preserved = true;
+      }
+      try {
+        await tmp.rename(dest);
+      } on Object {
+        if (preserved) await Directory(backup).rename(dest);
+        rethrow;
+      }
+      if (preserved) await Directory(backup).delete(recursive: true);
+    } finally {
+      if (tmp.existsSync()) await tmp.delete(recursive: true);
     }
-    await Directory(p.dirname(dest)).create(recursive: true);
-    await copyDirectoryPreservingSymlinks(tmp.path, dest);
-    await tmp.delete(recursive: true);
 
     return dest;
   }
@@ -491,6 +573,7 @@ final class FlutterPacker {
     required String runnerBinary,
     required String sdkName,
     required List<String> pluginLibraries,
+    required List<String> pluginResourceBundles,
     required List<String> nativeAssetFrameworks,
     required IosDeploymentTarget deploymentTarget,
     required List<BuiltAppExtension> extensions,
@@ -511,15 +594,29 @@ final class FlutterPacker {
       p.join(frameworksDir, 'App.framework'),
     );
     await copyPluginLibraries(pluginLibraries, frameworksDir);
+    for (final resource in pluginResourceBundles) {
+      final destination = p.join(bundleDir, p.basename(resource));
+      if (FileSystemEntity.typeSync(destination) !=
+          FileSystemEntityType.notFound) {
+        throw FlutterBuildError(
+          'Duplicate plugin resource bundle: $destination',
+        );
+      }
+      await copyDirectoryPreservingSymlinks(resource, destination);
+    }
     await copyNativeAssetFrameworks(nativeAssetFrameworks, frameworksDir);
 
     await _embedAppExtensions(bundleDir, extensions);
-    await stageIosBundleResources(
+    final assetPlist = await stageIosBundleResources(
       projectRoot: projectRoot,
       bundleDir: bundleDir,
+      strict: _release,
+      compileSources: true,
+      deploymentTarget: deploymentTarget.version,
     );
     await _writeInfoPlist(
       bundleDir,
+      assetPlist: assetPlist,
       deploymentTarget: deploymentTarget,
       sdkName: sdkName,
     );
@@ -568,18 +665,19 @@ final class FlutterPacker {
   }
 
   /// Generate and write `Info.plist` into [bundleDir] with `$(VAR)`
-  /// substitution, mandatory iOS keys, storyboard stripping, and ObjC class
+  /// substitution, mandatory iOS keys, storyboard validation, and ObjC class
   /// name normalization.
   Future<void> _writeInfoPlist(
     String bundleDir, {
     required IosDeploymentTarget deploymentTarget,
     required String sdkName,
+    String? assetPlist,
   }) async {
     var plistXml = await _loadPlistTemplate();
 
     // ORDER MATTERS: vars must be expanded before forcing keys so that forced
     // keys see already-substituted values from the template, and before
-    // storyboard stripping so $(VAR)-valued storyboard names are resolved
+    // storyboard validation so $(VAR)-valued storyboard names are resolved
     // before the .storyboardc filesystem probe.
     plistXml = InfoPlist.expandXmlVars(
       plistXml,
@@ -590,8 +688,11 @@ final class FlutterPacker {
       bundleId: bundleId,
       deploymentTarget: deploymentTarget,
     );
-    plistXml = InfoPlist.applyDebugVmServiceDiscovery(plistXml);
-    plistXml = InfoPlist.stripUnsatisfiableStoryboards(plistXml, bundleDir);
+    if (!_release) plistXml = InfoPlist.applyDebugVmServiceDiscovery(plistXml);
+    if (assetPlist != null) {
+      plistXml = InfoPlist.mergeAssetMetadata(plistXml, assetPlist);
+    }
+    InfoPlist.validateStoryboardReferences(plistXml, bundleDir);
     plistXml = InfoPlist.applySceneLifecycle(plistXml);
     plistXml = InfoPlist.normalizeObjCClassNames(plistXml);
     // Carry the app's own App Groups forward so the sign/install stage can
@@ -620,8 +721,8 @@ final class FlutterPacker {
   ///
   /// Precedence (lowest → highest):
   ///   1. Hard-coded defaults (`1.0.0` / `1`).
-  ///   2. `Debug.xcconfig` and its includes in textual order, falling back
-  ///      to `Generated.xcconfig` only when no Debug file exists.
+  ///   2. The build mode's `.xcconfig` and includes in textual order, falling back
+  ///      to `Generated.xcconfig` only when no mode-specific file exists.
   ///   3. Explicit `--build-name` / `--build-number` CLI flags.
   @visibleForTesting
   Future<Map<String, String>> buildSubstitutionMap({
@@ -656,7 +757,10 @@ final class FlutterPacker {
     final overrides = _buildVersionOverrides();
     subs.addAll(
       await XcconfigResolver.readDebugConfiguration(
-        debugPath: p.join(flutterConfigDirectory, 'Debug.xcconfig'),
+        debugPath: p.join(
+          flutterConfigDirectory,
+          _release ? 'Release.xcconfig' : 'Debug.xcconfig',
+        ),
         generatedPath: p.join(flutterConfigDirectory, 'Generated.xcconfig'),
         sdk: sdkName,
         defaults: subs,

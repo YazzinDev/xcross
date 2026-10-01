@@ -4,15 +4,23 @@ import 'package:xcross/src/flutter/flutter.dart';
 final class CoreDeviceLaunchProfile {
   const CoreDeviceLaunchProfile.native({this.arguments = const []})
     : hotReload = null,
-      _flutterRuntime = false;
+      _flutterRuntime = false,
+      attachDebugger = true;
 
   const CoreDeviceLaunchProfile.flutter({
     required this.hotReload,
     this.arguments = const [],
-  }) : _flutterRuntime = true;
+  }) : _flutterRuntime = true,
+       attachDebugger = true;
+
+  const CoreDeviceLaunchProfile.flutterRelease({this.arguments = const []})
+    : hotReload = null,
+      _flutterRuntime = false,
+      attachDebugger = false;
 
   final List<String> arguments;
   final HotReloadConfig? hotReload;
+  final bool attachDebugger;
   final bool _flutterRuntime;
 
   List<String> argumentsForLaunch({

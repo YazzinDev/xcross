@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:darwin_sdk_kit/darwin_sdk_kit.dart';
-import 'package:path/path.dart' as p;
 import 'package:xcross/src/cli/basic/sdk_install.dart';
 import 'package:xcross/src/flutter/build/flutter_packer.dart';
+import 'package:xcross/src/flutter/build/internal/build_lock.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_gate_evidence.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
 import 'package:xcross/src/flutter/build/ios_bundle_id.dart';
@@ -18,7 +18,7 @@ abstract final class FlutterPackOperation {
   /// Build the Flutter iOS `.app` for the project in the current directory.
   ///
   /// Bundle id comes from `ios/Runner/Info.plist` / `project.pbxproj` (same
-  /// sources Flutter tooling uses). Deletes any prior bundle, then packs.
+  /// sources Flutter tooling uses). Publishes a complete staged bundle.
   static Future<({bool swiftPmArtifact, bool packageLocalArtifact})>
   artifactJunctionCapabilities({
     required String evidenceRoot,
@@ -201,10 +201,16 @@ abstract final class FlutterPackOperation {
     return capabilities;
   }
 
-  static Future<PackResult> pack({required FlutterBuildOptions options}) async {
+  static Future<PackResult> pack({required FlutterBuildOptions options}) =>
+      withFlutterProjectLock(() => _packLocked(options));
+
+  static Future<PackResult> _packLocked(FlutterBuildOptions options) async {
     final projectRoot = Directory.current.path;
     final bundleId = IosBundleId.resolve(projectRoot);
-    final workspace = SwiftPmWorkspace.forProject(projectRoot);
+    final workspace = SwiftPmWorkspace.forProject(
+      projectRoot,
+      mode: options.mode,
+    );
 
     final packer = FlutterPacker(
       projectRoot: projectRoot,
@@ -213,13 +219,6 @@ abstract final class FlutterPackOperation {
       artifactJunctionCapabilityResolver: () =>
           resolveArtifactJunctionCapabilities(workspace: workspace),
     );
-
-    // Always delete any previous bundle BEFORE packing, otherwise stale
-    // binaries from an earlier build get codesigned into the new one.
-    final bundleDir = Directory(
-      p.join(projectRoot, 'build', 'xcross-ios', '${packer.appName}.app'),
-    );
-    if (bundleDir.existsSync()) await bundleDir.delete(recursive: true);
 
     final appPath = await packer.pack();
     return PackResult(outputPath: appPath, bundleId: bundleId);

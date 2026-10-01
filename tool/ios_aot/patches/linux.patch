@@ -1,0 +1,199 @@
+--- a/runtime/BUILD.gn
++++ b/runtime/BUILD.gn
+@@ -149,6 +149,14 @@
+ config("dart_linux_arm64_config") {
+   defines = [
+     "DART_TARGET_OS_LINUX",
++    "TARGET_ARCH_ARM64",
++  ]
++}
++
++config("dart_ios_arm64_config") {
++  defines = [
++    "DART_TARGET_OS_MACOS",
++    "DART_TARGET_OS_MACOS_IOS",
+     "TARGET_ARCH_ARM64",
+   ]
+ }
+--- a/runtime/configs.gni
++++ b/runtime/configs.gni
+@@ -63,6 +63,12 @@
+       "$_dart_runtime:dart_linux_arm64_config",
+     ] + _product + _precompiler_base
+ 
++_precompiler_product_ios_arm64_config =
++    [
++      "$_dart_runtime:dart_config",
++      "$_dart_runtime:dart_ios_arm64_config",
++    ] + _product + _precompiler_base
++
+ _precompiler_product_linux_arm_config =
+     [
+       "$_dart_runtime:dart_config",
+@@ -156,6 +162,14 @@
+   {
+     suffix = "_precompiler_product_linux_arm64"
+     configs = _precompiler_product_linux_arm64_config
++    snapshot = false
++    compiler = true
++    is_product = true
++  },
++
++  {
++    suffix = "_precompiler_product_ios_arm64"
++    configs = _precompiler_product_ios_arm64_config
+     snapshot = false
+     compiler = true
+     is_product = true
+--- a/runtime/bin/BUILD.gn
++++ b/runtime/bin/BUILD.gn
+@@ -112,6 +112,13 @@
+   ]
+ }
+ 
++build_libdart_builtin("libdart_builtin_product_ios_arm64") {
++  extra_configs = [
++    "..:dart_product_config",
++    "..:dart_ios_arm64_config",
++  ]
++}
++
+ build_libdart_builtin("libdart_builtin_product_linux_arm") {
+   extra_configs = [
+     "..:dart_product_config",
+@@ -384,6 +391,19 @@
+   ]
+ }
+ 
++build_gen_snapshot("gen_snapshot_product_ios_arm64") {
++  extra_configs = [
++    "..:dart_product_config",
++    "..:dart_ios_arm64_config",
++  ]
++  extra_deps = [
++    ":gen_snapshot_dart_io_product_ios_arm64",
++    ":libdart_builtin_product_ios_arm64",
++    "..:libdart_precompiler_product_ios_arm64",
++    "../platform:libdart_platform_precompiler_product_ios_arm64",
++  ]
++}
++
+ build_gen_snapshot("gen_snapshot_product_linux_arm") {
+   extra_configs = [
+     "..:dart_product_config",
+@@ -508,6 +528,13 @@
+   extra_configs = [
+     "..:dart_product_config",
+     "..:dart_linux_arm64_config",
++  ]
++}
++
++build_gen_snapshot_dart_io("gen_snapshot_dart_io_product_ios_arm64") {
++  extra_configs = [
++    "..:dart_product_config",
++    "..:dart_ios_arm64_config",
+   ]
+ }
+ 
+--- a/runtime/vm/dwarf.cc
++++ b/runtime/vm/dwarf.cc
+@@ -406,21 +406,17 @@
+       }
+       case CodeSourceMapOps::kAdvancePC: {
+         current_pc_offset += arg1;
+-        if (arg1 == 0) {
+-          // This happens at the start of the function where we emit a special
+-          // kAdvancePC 0 instruction to record information about the function
+-          // itself. We need to advance current_pc_offset a bit to prevent
+-          // starting inlining interval directy at the start of the function
+-          // itself.
+-          current_pc_offset += 1;
+-        }
+         break;
+       }
+       case CodeSourceMapOps::kPushFunction: {
++        // kAdvancePC 0 records the root function at its entry PC. Keep
++        // inline intervals off that PC without shifting later source-map PCs.
++        const int32_t inline_pc_offset =
++            current_pc_offset == 0 ? 1 : current_pc_offset;
+         const Function& child_func =
+             Function::ZoneHandle(zone_, Function::RawCast(functions.At(arg1)));
+         InliningNode* child_node = new (zone_)
+-            InliningNode(child_func, token_positions.Last(), current_pc_offset);
++            InliningNode(child_func, token_positions.Last(), inline_pc_offset);
+         node_stack.Last()->AppendChild(child_node);
+         node_stack.Add(child_node);
+         token_positions.Add(kNoDebugInfoPositionInfo);
+@@ -430,7 +426,7 @@
+         // We never pop the root function.
+         ASSERT(node_stack.length() > 1);
+         ASSERT(token_positions.length() > 1);
+-        node_stack.Last()->end_pc_offset = current_pc_offset;
++        node_stack.Last()->end_pc_offset = current_pc_offset == 0 ? 1 : current_pc_offset;
+         node_stack.RemoveLast();
+         token_positions.RemoveLast();
+         break;
+@@ -444,7 +440,7 @@
+   }
+ 
+   while (node_stack.length() > 1) {
+-    node_stack.Last()->end_pc_offset = current_pc_offset;
++    node_stack.Last()->end_pc_offset = current_pc_offset == 0 ? 1 : current_pc_offset;
+     node_stack.RemoveLast();
+     token_positions.RemoveLast();
+   }
+--- a/build/toolchain/linux/BUILD.gn
++++ b/build/toolchain/linux/BUILD.gn
+@@ -44,16 +44,9 @@
+   gcc_compiler_prefix = compiler_prefix
+ }
+ 
+-# Google's clang does not work for alpine, use alpine's system clang
+-if (dart_sysroot == "alpine") {
+-  rebased_clang_dir = "/usr/bin"
+-} else if (host_cpu == "arm64") {
+-  rebased_clang_dir =
+-      rebase_path("//buildtools/linux-arm64/clang/bin", root_build_dir)
+-} else {
+-  rebased_clang_dir =
+-      rebase_path("//buildtools/linux-x64/clang/bin", root_build_dir)
+-}
++# Use the explicitly selected native host LLVM installation.
++import("//build/config/clang/clang.gni")
++rebased_clang_dir = clang_prefix
+ 
+ template("gcc_toolchain_suite") {
+   toolchain_suite(target_name) {
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -3,6 +3,7 @@
+ # found in the LICENSE file.
+ 
+ declare_args() {
++  xcross_host_toolchain_sha256 = ""
+   # The optimization level to use for debug builds.
+   if (is_android) {
+     # On Android we kind of optimize some things that don't affect debugging
+@@ -430,7 +431,10 @@
+   # changes since artifacts from an older version of the toolchain may or may
+   # not be compatible with newer ones. To achieve this, we insert a synthetic
+   # define into the compile line.
+-  if (is_clang && (is_linux || is_mac || is_ios) && dart_sysroot != "alpine") {
++  if (is_linux && xcross_host_toolchain_sha256 != "") {
++    # Rebuild when the explicitly selected native compiler changes.
++    defines += [ "TOOLCHAIN_VERSION=${xcross_host_toolchain_sha256}" ]
++  } else if (is_clang && (is_linux || is_mac || is_ios) && dart_sysroot != "alpine") {
+     if (is_linux && host_cpu == "arm64") {
+       toolchain_stamp_file =
+           "//buildtools/linux-arm64/clang/.versions/clang.cipd_version"
+--- a/build/config/linux/BUILD.gn
++++ b/build/config/linux/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//build/config/sysroot.gni")
+ 
+ config("sdk") {
+-  ldflags = []
++  ldflags = [ "-fuse-ld=lld" ]
+   cflags = []
+ 
+   if (is_clang) {

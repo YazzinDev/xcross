@@ -21,6 +21,7 @@ import 'package:xcross/src/flutter/build/swiftpm_binary_artifact_preparer.dart';
 import 'package:xcross/src/flutter/build/swiftpm_binary_artifact_store.dart';
 import 'package:xcross/src/flutter/build/swiftpm_binary_target.dart';
 import 'package:xcross/src/flutter/errors.dart';
+import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
 
 String swiftPath(String path) => p.absolute(path).replaceAll(r'\', '/');
 
@@ -189,18 +190,25 @@ flutter:
       final framework = Directory(p.join(tmp.path, 'Flutter.xcframework'))
         ..createSync();
 
-      Future<String> fingerprint({required bool verbose}) =>
-          GeneratedPluginsPackage.incrementalBuildFingerprint(
-            plugins: [plugin],
-            flutterXcframework: framework.path,
-            deploymentTarget: const IosDeploymentTarget('15.0'),
-            verbose: verbose,
-            toolchainIdentity: 'swift',
-            sdkIdentity: 'sdk',
-          );
+      Future<String> fingerprint({
+        required bool verbose,
+        FlutterBuildMode mode = FlutterBuildMode.debug,
+      }) => GeneratedPluginsPackage.incrementalBuildFingerprint(
+        plugins: [plugin],
+        flutterXcframework: framework.path,
+        deploymentTarget: const IosDeploymentTarget('15.0'),
+        verbose: verbose,
+        mode: mode,
+        toolchainIdentity: 'swift',
+        sdkIdentity: 'sdk',
+      );
 
       expect(
         await fingerprint(verbose: true),
+        isNot(await fingerprint(verbose: false)),
+      );
+      expect(
+        await fingerprint(verbose: false, mode: FlutterBuildMode.release),
         isNot(await fingerprint(verbose: false)),
       );
     });
@@ -5685,6 +5693,19 @@ module FirebaseFirestore {
   });
 
   group('built dylibs', () {
+    test('release selects optimized configuration with real DWARF', () {
+      final arguments = GeneratedPluginsPackage.swiftBuildArguments(
+        mode: FlutterBuildMode.release,
+        pluginsDir: 'plugins',
+        scratchPath: 'scratch',
+        swiftSdksPath: 'sdks',
+        iosSdk: 'iPhoneOS.sdk',
+        flutterFrameworkSlice: 'Flutter.xcframework/ios-arm64',
+      );
+      expect(arguments, containsAllInOrder(['--configuration', 'release']));
+      expect(arguments, containsAllInOrder(['-debug-info-format', 'dwarf']));
+    });
+
     test('returns the aggregate and every produced dynamic library', () async {
       final output = Directory(p.join(tmp.path, 'debug'))..createSync();
       final aggregate = File(
@@ -5695,12 +5716,18 @@ module FirebaseFirestore {
       File(
         p.join(output.path, 'libStaticPlugin.a'),
       ).writeAsStringSync('static');
+      final resources = Directory(
+        p.join(output.path, 'Support_ProbeSupport.bundle'),
+      )..createSync();
+      File(p.join(resources.path, 'marker.txt')).writeAsStringSync('resource');
+      Directory(p.join(output.path, 'Plugin.build')).createSync();
 
       final result = await GeneratedPluginsPackage.discoverAndRewriteDylibs(
         output.path,
       );
 
       expect(result.libraryPath, p.absolute(aggregate.path));
+      expect(result.resourceBundles, [p.absolute(resources.path)]);
       expect(result.dylibPaths, {
         p.absolute(aggregate.path),
         p.absolute(dependency.path),

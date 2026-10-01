@@ -72,6 +72,9 @@ analyzer:
     [
       tools/**,
       build/**,
+      tool/**/build/**,
+      # Flutter integration fixtures resolve their own SDK and dependencies.
+      tool/ios_aot/**,
       examples/**,
       "**/*.freezed.dart",
       "**/*.g.dart",

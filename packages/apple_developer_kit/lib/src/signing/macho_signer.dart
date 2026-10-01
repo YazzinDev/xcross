@@ -48,6 +48,113 @@ class MachOSigner {
       codeResourcesSha256: codeResourcesSha256,
       signingTime: signingTime,
     );
+    await _writeSignedFile(path, signed);
+  }
+
+  /// Real ad-hoc signing for intermediate native-asset dylibs. This writes a
+  /// SHA-256 CodeDirectory with CS_ADHOC, without a certificate, team, or CMS.
+  /// Device installation still requires the final development bundle signer.
+  static Future<void> signAdhocFile(
+    String path, {
+    required String identifier,
+    Uint8List? infoPlistBytes,
+  }) async {
+    final bytes = await _read(path);
+    final signed = signAdhocBytes(
+      path: path,
+      bytes: bytes,
+      identifier: identifier,
+      infoPlistBytes: infoPlistBytes,
+    );
+    await _writeSignedFile(path, signed);
+  }
+
+  @visibleForTesting
+  static Uint8List signAdhocBytes({
+    required String path,
+    required Uint8List bytes,
+    required String identifier,
+    Uint8List? infoPlistBytes,
+  }) {
+    requireSigningString(identifier, 'identifier', path);
+    final macho = MachOLayout.parse(bytes, path);
+    if (macho.fileType == mhExecute) {
+      machoFail(
+        path,
+        'ad-hoc signing',
+        'only intermediate dylibs are supported',
+      );
+    }
+    final dataOffset = _signatureDataOffset(macho, bytes, path);
+    final commandOffset = macho.signatureCommand ?? macho.commandsEnd;
+    final code = _buildCodeImage(
+      bytes: bytes,
+      macho: macho,
+      dataOffset: dataOffset,
+      commandOffset: commandOffset,
+      path: path,
+    );
+    _updateSignatureLayout(
+      code,
+      macho,
+      commandOffset,
+      dataOffset,
+      macho.signatureDataSize,
+      path,
+    );
+    Uint8List signature() => buildSuperblob([
+      SignatureSlot(
+        type: csslotCodeDirectory,
+        bytes: buildCodeDirectory(
+          code: code,
+          codeLimit: dataOffset,
+          execSegmentLimit: macho.textVmSize,
+          execSegmentFlags: 0,
+          identifier: identifier,
+          teamIdentifier: '',
+          specialSlots: [
+            if (infoPlistBytes != null) sha256Digest(infoPlistBytes),
+          ],
+          codeSigningFlags: 2,
+          path: path,
+        ),
+      ),
+    ], path);
+    final needed = alignUp(
+      signature().length,
+      signatureAlignment,
+      path,
+      'ad-hoc signature size',
+    );
+    final dataSize = macho.signatureDataSize >= needed
+        ? macho.signatureDataSize
+        : needed;
+    final finalLength = checkedAdd(
+      dataOffset,
+      dataSize,
+      uint32Max,
+      path,
+      'ad-hoc file length',
+    );
+    writeU32le(
+      code,
+      commandOffset + CodeSignatureCommand.dataSize,
+      dataSize,
+      path,
+      'LC_CODE_SIGNATURE.datasize',
+    );
+    _updateLinkedit(code, macho, finalLength, path);
+    final finalSignature = signature();
+    final result = Uint8List(finalLength)..setRange(0, code.length, code);
+    result.setRange(
+      dataOffset,
+      dataOffset + finalSignature.length,
+      finalSignature,
+    );
+    return result;
+  }
+
+  static Future<void> _writeSignedFile(String path, Uint8List signed) async {
     final int mode;
     try {
       mode = File(path).statSync().mode & 0xfff;

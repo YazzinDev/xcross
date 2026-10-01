@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -30,6 +31,29 @@ void main() {
       final active = Directory(
         p.join(systemTemp.path, 'xcross-update-source-active'),
       )..createSync();
+      final locked = Directory(
+        p.join(systemTemp.path, 'xcross-update-source-long-build'),
+      )..createSync();
+      final worker = File(p.join(scratch.path, 'hold_lock.dart'))
+        ..writeAsStringSync('''
+import 'dart:io';
+Future<void> main(List<String> arguments) async {
+  final lock = await File(arguments.single).open(mode: FileMode.append);
+  await lock.lock();
+  stdout.writeln('ready');
+  await stdin.drain<void>();
+  await lock.close();
+}
+''');
+      final process = await Process.start(Platform.resolvedExecutable, [
+        worker.path,
+        p.join(locked.path, '.active.lock'),
+      ]);
+      addTearDown(() async {
+        await process.stdin.close();
+        await process.exitCode;
+      });
+      expect(await process.stdout.transform(utf8.decoder).first, 'ready\n');
       final unrelated = Directory(p.join(systemTemp.path, 'xcross-self-update'))
         ..createSync();
       final staging = Directory(p.join(scratch.path, 'staging'));
@@ -63,7 +87,8 @@ void main() {
             Future.value(staging..createSync(recursive: true)),
         deleteDirectory: _deleteDirectorySync,
         systemTempDirectory: systemTemp,
-        tempDirectoryModifiedAt: (directory) => directory.path == stale.path
+        tempDirectoryModifiedAt: (directory) =>
+            directory.path == stale.path || directory.path == locked.path
             ? DateTime.now().subtract(const Duration(hours: 1))
             : DateTime.now(),
       );
@@ -80,7 +105,20 @@ void main() {
 
       expect(staleWasDeletedBeforeClone, isTrue);
       expect(active.existsSync(), isTrue);
+      expect(locked.existsSync(), isTrue);
       expect(unrelated.existsSync(), isTrue);
+      await process.stdin.close();
+      expect(await process.exitCode, 0);
+      await builder.build<void>(
+        ref: const GitUpdateRef(
+          kind: GitUpdateRefKind.branch,
+          displayName: 'main',
+          fetchRef: 'refs/heads/main',
+          commitSha: '1234567890abcdef1234567890abcdef12345678',
+        ),
+        onBundle: (_, __) async {},
+      );
+      expect(locked.existsSync(), isFalse);
     });
 
     test('reuses one Dart launcher for source update commands', () async {

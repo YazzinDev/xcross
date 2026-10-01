@@ -1,0 +1,86 @@
+{
+  "flutterRevision": "6a19cca56475dbfba1478ee68d7bd0c2ef891da1",
+  "engineArtifactKey": "af7e796e161ae0bb1ff0758c71a7105418bd9ded",
+  "engineSourceRevision": "af7e796e161ae0bb1ff0758c71a7105418bd9ded",
+  "engineContentHash": "ab598368592da0064197e2bc15c7f5b0a2c6bb1f",
+  "dartRevision": "b530c21f7de367b94fb04787bfed9d8e989d75e8",
+  "snapshotHash": "0451907c2eaa8467e848c0067bfe8ed4",
+  "gnRevision": "b8becbd4f7979f63ab3542524b2b4d8db2ce3b52",
+  "zlibRevision": "3008c4b3a06bd65392c31db8846000a21e3d03c5",
+  "icuRevision": "a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
+  "boringsslRevision": "2e508c973d634b3aa51b71db5062bc6b096e5031",
+  "downloads": {
+    "python-windows-x64.tar.gz": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250902/cpython-3.13.7%2B20250902-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+      "sha256": "ffd3dd92f60041db8a9c24a5d84b915ece8ad4202cfd401b46bafaa4c8dab324"
+    },
+    "python-linux-x64.tar.gz": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250902/cpython-3.13.7%2B20250902-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "6a8280f4b08d75428eea83955678c51da00c585bb411562cd53f510680becf00"
+    },
+    "python-linux-arm64.tar.gz": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250902/cpython-3.13.7%2B20250902-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "e9dbfda219752abb36f9023d11fc7a4d66dda70a52962817f72db06b32b6bcbd"
+    },
+    "ios-release.zip": {
+      "url": "https://storage.googleapis.com/flutter_infra_release/flutter/af7e796e161ae0bb1ff0758c71a7105418bd9ded/ios-release/artifacts.zip",
+      "sha256": "d2f31932154b7fa5153ee17e7be3f82d8b09ea04d5cffc902a01f93b2b5dccde"
+    },
+    "ninja.zip": {
+      "url": "https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/ninja/windows-amd64/+/version:3@1.13.2.chromium.4",
+      "sha256": "dd3809d42930ffc6ea86acab03396d34f575a188590a5ad55b05d631513c4558"
+    },
+    "dart-b530c21.tar.gz": {
+      "url": "https://codeload.github.com/dart-lang/sdk/tar.gz/b530c21f7de367b94fb04787bfed9d8e989d75e8",
+      "sha256": "ecf9380e355f935863b52800051b3874dd6e5c0b2a7a2c2d976fa553810e132f"
+    },
+    "gn.zip": {
+      "url": "https://chrome-infra-packages.appspot.com/dl/gn/gn/windows-amd64/+/git_revision:b8becbd4f7979f63ab3542524b2b4d8db2ce3b52",
+      "sha256": "e82b67effba13a1985dd3a107c71403a34ea78d5de900c035e5e3e6596449b98"
+    },
+    "zlib.tar.gz": {
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/zlib/+archive/3008c4b3a06bd65392c31db8846000a21e3d03c5.tar.gz",
+      "sha256": "508decaf11dc67e97e983372c6e40d663224e560243ca2e7c96069b11ac457a6"
+    },
+    "icu.tar.gz": {
+      "url": "https://chromium.googlesource.com/chromium/deps/icu/+archive/a86a32e67b8d1384b33f8fa48c83a6079b86f8cd.tar.gz",
+      "sha256": "3c9a26875c4794f16ec041223e53004c6b71e6af573903669e91ed59e7288c68"
+    },
+    "boringssl.tar.gz": {
+      "url": "https://boringssl.googlesource.com/boringssl.git/+archive/2e508c973d634b3aa51b71db5062bc6b096e5031.tar.gz",
+      "sha256": "aa343690a9763bf16fec44977d348c35695e9bb17e89e9743d45d2fd95044e18"
+    },
+    "gn-linux-amd64.zip": {
+      "url": "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/git_revision:b8becbd4f7979f63ab3542524b2b4d8db2ce3b52",
+      "sha256": "58f2e6d65ead73bf2ff4d729874c904a285b4cbf1f02ffbcfd7e8127acefbfdb"
+    },
+    "gn-linux-arm64.zip": {
+      "url": "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-arm64/+/git_revision:b8becbd4f7979f63ab3542524b2b4d8db2ce3b52",
+      "sha256": "90c02d2244951bd3e11626d34e5e86281b338a2fffcfddf7c0efa491a001685f"
+    },
+    "ninja-linux-amd64.zip": {
+      "url": "https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/ninja/linux-amd64/+/version:3@1.13.2.chromium.4",
+      "sha256": "6140f87d6a976f85f3d0e6ae569e0e8e642fcb25cf360d9d4285bafd5f43b4f5"
+    },
+    "ninja-linux-arm64.zip": {
+      "url": "https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/ninja/linux-arm64/+/version:3@1.13.2.chromium.4",
+      "sha256": "e2a3ac6234023bf051f092b0a93ee2395da8169aefc17483fcb8b853a9b5fe72"
+    },
+    "dart-sdk-windows-x64.zip": {
+      "url": "https://storage.googleapis.com/flutter_infra_release/flutter/af7e796e161ae0bb1ff0758c71a7105418bd9ded/dart-sdk-windows-x64.zip",
+      "sha256": "0f2fd071d69703f2f72db4acf60a889a800c3cc22025e2d373ea5704e00cb4ca"
+    },
+    "dart-sdk-linux-x64.zip": {
+      "url": "https://storage.googleapis.com/flutter_infra_release/flutter/af7e796e161ae0bb1ff0758c71a7105418bd9ded/dart-sdk-linux-x64.zip",
+      "sha256": "fe8dac5ad2d90d4bc6d285a3abbcc0e8bc07faee1bb3d4001d588c065e5441c1"
+    },
+    "dart-sdk-linux-arm64.zip": {
+      "url": "https://storage.googleapis.com/flutter_infra_release/flutter/af7e796e161ae0bb1ff0758c71a7105418bd9ded/dart-sdk-linux-arm64.zip",
+      "sha256": "e105fd0eeee0321ad946a5c7d8b670ab067dbe9ee4c7efc002394e7d1da3b303"
+    },
+    "flutter_patched_sdk_product.zip": {
+      "url": "https://storage.googleapis.com/flutter_infra_release/flutter/af7e796e161ae0bb1ff0758c71a7105418bd9ded/flutter_patched_sdk_product.zip",
+      "sha256": "327401d6abaf81700d3a0c582c4dc16933d31560bc79910e4a06962e4b378671"
+    }
+  }
+}

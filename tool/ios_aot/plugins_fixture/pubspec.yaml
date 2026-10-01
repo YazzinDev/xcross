@@ -1,0 +1,11 @@
+name: xcross_ios_plugins_probe
+publish_to: none
+environment:
+  sdk: ^3.13.0
+dependencies:
+  flutter:
+    sdk: flutter
+  xcross_swift_probe:
+    path: ../swift_plugin
+  xcross_objc_probe:
+    path: ../objc_plugin

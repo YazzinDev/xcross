@@ -1,0 +1,8 @@
+name: xcross_ios_objc_probe
+publish_to: none
+environment:
+  sdk: ^3.13.0
+dependencies:
+  flutter:
+    sdk: flutter
+  objective_c: 9.6.0

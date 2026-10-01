@@ -8,6 +8,11 @@ part of 'flutter_build_command.dart';
 
 FlutterBuildArgs _$parseFlutterBuildArgsResult(ArgResults result) =>
     FlutterBuildArgs()
+      ..obfuscate = result['obfuscate'] as bool
+      ..splitDebugInfo = result['split-debug-info'] as String?
+      ..debug = result['debug'] as bool
+      ..release = result['release'] as bool
+      ..profile = result['profile'] as bool
       ..target = result['target'] as String
       ..flavor = result['flavor'] as String?
       ..dartDefine = result['dart-define'] as List<String>
@@ -18,6 +23,27 @@ FlutterBuildArgs _$parseFlutterBuildArgsResult(ArgResults result) =>
       ..ipa = result['ipa'] as bool;
 
 ArgParser _$populateFlutterBuildArgsParser(ArgParser parser) => parser
+  ..addFlag(
+    'obfuscate',
+    help: 'Obfuscate Dart names (requires --release and --split-debug-info).',
+    negatable: false,
+  )
+  ..addOption(
+    'split-debug-info',
+    help:
+        'Directory for Dart stack trace symbols; keep this output for symbolication.',
+  )
+  ..addFlag('debug', help: 'Build a debug JIT app (default).', negatable: false)
+  ..addFlag(
+    'release',
+    help: 'Build a release iOS ARM64 AOT app.',
+    negatable: false,
+  )
+  ..addFlag(
+    'profile',
+    help: 'Profile mode (currently unsupported).',
+    negatable: false,
+  )
   ..addOption(
     'target',
     abbr: 't',

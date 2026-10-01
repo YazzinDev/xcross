@@ -123,6 +123,7 @@ Future<String> resolveHostCompiler(String clang, {bool? windows}) async =>
     (windows ?? Platform.isWindows) ? clang : ProcessRunner.locateTool('cc');
 
 /// Locates the native `xcross.exe` that Windows tool aliases are copies of.
+/// Linux release signing also requires a native launcher via [requireNative].
 ///
 /// native_toolchain_c only recognizes a compiler whose path ends in
 /// `clang.exe`, so batch shims cannot stand in for it. Returns null when no
@@ -131,22 +132,23 @@ Future<String> resolveHostCompiler(String clang, {bool? windows}) async =>
 Future<String?> resolveNativeAssetToolForwarder(
   String executable, {
   bool? windows,
+  bool requireNative = false,
   String? launcher,
   Future<String?> Function()? findInstalled,
 }) async {
-  if (!(windows ?? Platform.isWindows)) return executable;
-  if (_isNativeXcross(executable)) return executable;
+  final isWindows = windows ?? Platform.isWindows;
+  if (!isWindows && !requireNative) return executable;
+  final name = isWindows ? 'xcross.exe' : 'xcross';
+  bool isNative(String path) => p.windows.basename(path).toLowerCase() == name;
+  if (isNative(executable)) return executable;
   final configured = launcher ?? _launcherOverride;
   if (configured != null &&
-      _isNativeXcross(configured) &&
+      isNative(configured) &&
       File(configured).existsSync()) {
     return configured;
   }
-  return (findInstalled ?? () => ProcessRunner.which('xcross.exe'))();
+  return (findInstalled ?? () => ProcessRunner.which(name))();
 }
-
-bool _isNativeXcross(String path) =>
-    p.windows.basename(path).toLowerCase() == 'xcross.exe';
 
 FlutterBuildError missingNativeAssetToolForwarderError() => FlutterBuildError(
   "Windows native assets need the native xcross.exe binary: Flutter's "
@@ -191,6 +193,7 @@ Future<void> installAppleToolShims(
   AppleToolShimConfig config, {
   String? toolForwarderExecutable,
   bool? windows,
+  bool release = false,
 }) async {
   final isWindows = windows ?? Platform.isWindows;
   await Directory(directory).create(recursive: true);
@@ -201,12 +204,37 @@ Future<void> installAppleToolShims(
     if (config.installNameTool case final tool?) 'install_name_tool': tool,
   };
 
+  if (release) {
+    if (config.installNameTool == null) {
+      // LLVM selects the install-name driver by argv[0]. Some Windows
+      // distributions ship objcopy without its documented tool alias.
+      // Materialize a private copy, never rename/patch the installed tool.
+      final alias = p.join(
+        directory,
+        ProcessRunner.hostExecutableName('llvm-install-name-tool'),
+      );
+      await File(await locateLlvmTool('llvm-objcopy')).copy(alias);
+      final help = await ProcessRunner.run(alias, ['--help']);
+      if (help.exitCode != 0 ||
+          !help.stdout.contains('-change') ||
+          !help.stdout.contains('-id')) {
+        throw FlutterBuildError(
+          'llvm-objcopy does not include the install-name-tool driver.',
+        );
+      }
+      auxiliaryTools['install_name_tool'] = alias;
+    }
+    auxiliaryTools['dsymutil'] = await locateLlvmTool('dsymutil');
+    auxiliaryTools['strip'] = await locateLlvmTool('llvm-strip');
+  }
+
   if (isWindows) {
     await _installWindowsToolShims(
       directory,
       config,
       auxiliaryTools: auxiliaryTools,
       toolForwarderExecutable: toolForwarderExecutable,
+      release: release,
     );
     return;
   }
@@ -216,6 +244,7 @@ Future<void> installAppleToolShims(
     config,
     auxiliaryTools: auxiliaryTools,
     toolForwarderExecutable: toolForwarderExecutable,
+    release: release,
   );
 }
 
@@ -224,6 +253,7 @@ Future<void> _installWindowsToolShims(
   AppleToolShimConfig config, {
   required Map<String, String> auxiliaryTools,
   required String? toolForwarderExecutable,
+  required bool release,
 }) async {
   if (toolForwarderExecutable == null) {
     throw missingNativeAssetToolForwarderError();
@@ -280,10 +310,16 @@ Future<void> _installWindowsToolShims(
       );
     }
   }
-  if (config.installNameTool == null) {
+  if (config.installNameTool == null && !release) {
     await _writeWindowsShim(directory, 'install_name_tool', batchCodesignShim);
   }
-  await _writeWindowsShim(directory, 'codesign', batchCodesignShim);
+  if (release) {
+    // Uses xcross's real ad-hoc CodeDirectory writer. The final bundle signer
+    // replaces it with the development identity before installation.
+    await File(toolForwarderExecutable).copy(p.join(directory, 'codesign.exe'));
+  } else {
+    await _writeWindowsShim(directory, 'codesign', batchCodesignShim);
+  }
   await File(p.join(directory, 'rsync.ps1')).writeAsString(r'''
 $items = @($args | Where-Object { -not $_.StartsWith('-') -and $_ -ne '.DS_Store/' })
 if ($items.Count -lt 2) { exit 1 }
@@ -304,6 +340,7 @@ Future<void> _installUnixToolShims(
   AppleToolShimConfig config, {
   required Map<String, String> auxiliaryTools,
   required String? toolForwarderExecutable,
+  required bool release,
 }) async {
   if (config.otool case final otool?) {
     await _writeUnixShim(
@@ -342,7 +379,19 @@ Future<void> _installUnixToolShims(
       await _writeUnixShim(directory, tool.key, renderUnixToolShim(tool.value));
     }
   }
-  await _writeUnixShim(directory, 'codesign', unixCodesignShim);
+  if (release) {
+    if (toolForwarderExecutable == null) {
+      throw FlutterBuildError(
+        'Release signing requires the xcross tool forwarder.',
+      );
+    }
+    // Dispatch by the codesign basename, just like the Windows executable
+    // aliases, so release native assets receive a real ad-hoc signature.
+    await File(toolForwarderExecutable).copy(p.join(directory, 'codesign'));
+    ProcessRunner.makeExecutable(p.join(directory, 'codesign'));
+  } else {
+    await _writeUnixShim(directory, 'codesign', unixCodesignShim);
+  }
 }
 
 Future<void> _writeUnixShim(

@@ -39,6 +39,8 @@ final class GitRefSourceBundleBuilder {
 
   static const _tempDirectoryPrefix = 'xcross-update-source-';
   static const _minimumStaleAge = Duration(minutes: 10);
+  static const _activeLock = '.active.lock';
+  static final _activeDirectories = <String>{};
 
   Future<T> build<T>({
     required GitUpdateRef ref,
@@ -55,7 +57,13 @@ final class GitRefSourceBundleBuilder {
     await _deleteStaleTempDirectories();
     final tempDirectory = await _createTempDirectory(_tempDirectoryPrefix);
     final progress = UpdateProgress('Source', UpdatePhases.source.length);
+    RandomAccessFile? activeLock;
+    _activeDirectories.add(tempDirectory.absolute.path);
     try {
+      activeLock = await File(
+        p.join(tempDirectory.path, _activeLock),
+      ).open(mode: FileMode.append);
+      await activeLock.lock();
       final repoDirectory = Directory(p.join(tempDirectory.path, 'xcross'));
       await progress.run(
         'Clone repository',
@@ -112,6 +120,8 @@ final class GitRefSourceBundleBuilder {
       );
       return await onBundle(_findBundle(packageDirectory), progress);
     } finally {
+      await activeLock?.close();
+      _activeDirectories.remove(tempDirectory.absolute.path);
       try {
         await _deleteDirectory(tempDirectory);
       } on Object {
@@ -172,6 +182,7 @@ final class GitRefSourceBundleBuilder {
         try {
           final modifiedAt = _tempDirectoryModifiedAt(entry);
           if (now.difference(modifiedAt) < _minimumStaleAge) continue;
+          if (!await _isInactive(entry)) continue;
           await entry.delete(recursive: true);
         } on Object {
           continue;
@@ -179,6 +190,25 @@ final class GitRefSourceBundleBuilder {
       }
     } on Object {
       return;
+    }
+  }
+
+  /// A compiler build can outlive the stale-age threshold without touching
+  /// its checkout root. Only an unowned checkout may be reclaimed. OS locks
+  /// are released on process exit; the set also covers same-process callers.
+  static Future<bool> _isInactive(Directory directory) async {
+    if (_activeDirectories.contains(directory.absolute.path)) return false;
+    RandomAccessFile? lock;
+    try {
+      lock = await File(
+        p.join(directory.path, _activeLock),
+      ).open(mode: FileMode.append);
+      await lock.lock();
+      return true;
+    } on FileSystemException {
+      return false;
+    } finally {
+      await lock?.close();
     }
   }
 

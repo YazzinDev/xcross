@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document targetRuntime="iOS.CocoaTouch" initialViewController="launch" launchScreen="YES" useAutolayout="YES">
+  <scenes><scene sceneID="scene"><objects>
+    <viewController id="launch"><view key="view" id="root">
+      <rect key="frame" x="0" y="0" width="390" height="844"/>
+      <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+      <color key="backgroundColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+      <subviews>
+        <imageView id="background" image="Tiny1" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO"/>
+        <imageView id="marker" image="Scaled" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO">
+          <constraints>
+            <constraint firstAttribute="width" constant="96" id="width"/>
+            <constraint firstAttribute="height" constant="96" id="height"/>
+          </constraints>
+        </imageView>
+      </subviews>
+      <constraints>
+        <constraint firstItem="background" firstAttribute="top" secondItem="root" secondAttribute="top" id="top"/>
+        <constraint firstItem="background" firstAttribute="bottom" secondItem="root" secondAttribute="bottom" id="bottom"/>
+        <constraint firstItem="background" firstAttribute="leading" secondItem="root" secondAttribute="leading" id="leading"/>
+        <constraint firstItem="background" firstAttribute="trailing" secondItem="root" secondAttribute="trailing" id="trailing"/>
+        <constraint firstItem="marker" firstAttribute="centerX" secondItem="root" secondAttribute="centerX" id="centerX"/>
+        <constraint firstItem="marker" firstAttribute="centerY" secondItem="root" secondAttribute="centerY" id="centerY"/>
+      </constraints>
+    </view></viewController>
+  </objects></scene></scenes>
+</document>

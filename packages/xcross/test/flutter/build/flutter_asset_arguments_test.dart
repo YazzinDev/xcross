@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:args/args.dart';
 import 'package:test/test.dart';
 import 'package:xcross/src/flutter/build/ios_deployment_target.dart';
 import 'package:xcross/src/flutter/build/ios_native_assets.dart';
@@ -42,6 +43,34 @@ void main() {
         expect(_decodedDefines(arguments(defines, flavor: 'staging')), defines);
       });
 
+      test(
+        'passes empty and comma-containing values through assemble parsing',
+        () {
+          const defines = ['EMPTY=', 'VALUE=one,two=three ü', 'MODE=last'];
+          final args = arguments(defines);
+          // Match Flutter assemble's public options, including the legacy -d
+          // comma splitting that must not consume the encoded application values.
+          final parser = ArgParser()
+            ..addFlag('version-check', defaultsTo: true)
+            ..addOption('output', abbr: 'o')
+            ..addMultiOption('define', abbr: 'd')
+            ..addMultiOption('dart-define', abbr: 'D', splitCommas: false);
+          final parsed = parser.parse(args.skip(1));
+          expect(
+            (parsed['define'] as List<String>).every(
+              (value) => value.contains('='),
+            ),
+            isTrue,
+          );
+          expect(
+            (parsed['dart-define'] as List<String>).map(
+              (value) => utf8.decode(base64.decode(value)),
+            ),
+            defines,
+          );
+        },
+      );
+
       test('does not invent a flavor for ordinary builds', () {
         expect(_decodedDefines(arguments(const [])), isEmpty);
       });
@@ -50,13 +79,9 @@ void main() {
 }
 
 List<String> _decodedDefines(List<String> arguments) {
-  final encoded = arguments
-      .singleWhere((argument) => argument.startsWith('-dDartDefines='))
-      .substring('-dDartDefines='.length);
-  return encoded.isEmpty
-      ? []
-      : encoded
-            .split(',')
-            .map((value) => utf8.decode(base64.decode(value)))
-            .toList();
+  return arguments
+      .where((argument) => argument.startsWith('--dart-define='))
+      .map((argument) => argument.substring('--dart-define='.length))
+      .map((value) => utf8.decode(base64.decode(value)))
+      .toList();
 }

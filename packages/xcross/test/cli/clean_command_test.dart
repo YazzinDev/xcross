@@ -5,6 +5,7 @@ import 'package:test/test.dart';
 import 'package:xcross/src/cli/basic/clean_command.dart';
 import 'package:xcross/src/cli/runner.dart';
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
+import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
 
 void main() {
   test('clean is registered by the top-level runner', () {
@@ -26,6 +27,13 @@ void main() {
       environment: {'XCROSS_CACHE_DIR': cache.path},
     );
     final swiftPm = Directory(workspace.root)..createSync(recursive: true);
+    final release = Directory(
+      SwiftPmWorkspace.forProject(
+        project.path,
+        environment: {'XCROSS_CACHE_DIR': cache.path},
+        mode: FlutterBuildMode.release,
+      ).root,
+    )..createSync(recursive: true);
 
     await CleanCommand.cleanProject(
       project.path,
@@ -34,6 +42,7 @@ void main() {
 
     expect(nativeAssets.existsSync(), isFalse);
     expect(swiftPm.existsSync(), isFalse);
+    expect(release.existsSync(), isFalse);
   });
 
   test('preserves unrelated build output and shared SwiftPM caches', () async {

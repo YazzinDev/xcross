@@ -4,6 +4,7 @@ import 'package:args/command_runner.dart';
 import 'package:cli_kit/cli_kit.dart';
 import 'package:path/path.dart' as p;
 import 'package:xcross/src/flutter/build/internal/swiftpm_workspace.dart';
+import 'package:xcross/src/flutter/models/flutter/flutter_build_options.dart';
 
 final class CleanCommand extends Command<void> {
   @override
@@ -27,13 +28,14 @@ final class CleanCommand extends Command<void> {
     String projectRoot, {
     Map<String, String>? environment,
   }) async {
-    final workspace = SwiftPmWorkspace.forProject(
-      projectRoot,
-      environment: environment,
-    );
     final paths = [
       p.join(projectRoot, 'build', 'xcross-native-assets'),
-      workspace.root,
+      for (final mode in FlutterBuildMode.values)
+        SwiftPmWorkspace.forProject(
+          projectRoot,
+          environment: environment,
+          mode: mode,
+        ).root,
     ];
     final removed = <String>[];
     for (final path in paths) {

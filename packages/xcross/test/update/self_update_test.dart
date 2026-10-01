@@ -146,6 +146,11 @@ void main() {
     installedLib('libkeep.so', 'old-lib');
     bundleBin('new-bin');
     bundleLib('libkeep.so', 'new-lib');
+    final compilerName =
+        'gen_snapshot_ios_arm64${Platform.isWindows ? '.exe' : ''}';
+    bundleLib(compilerName, 'compiler');
+    bundleLib('xcross-ios-aot-manifest.json', 'manifest');
+    bundleLib('ios-aot-NOTICES.txt', 'notices');
 
     await SelfUpdate.installBundle(
       bundleRoot: bundle,
@@ -171,6 +176,17 @@ void main() {
     );
 
     expect(File(layout.binaryPath).readAsStringSync(), 'new-bin');
+    for (final entry in {
+      compilerName: 'compiler',
+      'xcross-ios-aot-manifest.json': 'manifest',
+      'ios-aot-NOTICES.txt': 'notices',
+    }.entries) {
+      final file = File(p.join(layout.libDir, entry.key));
+      expect(file.readAsStringSync(), entry.value);
+      if (!Platform.isWindows && entry.key == compilerName) {
+        expect(file.statSync().mode & 0x49, isNonZero);
+      }
+    }
     expect(
       File(p.join(layout.libDir, 'libkeep.so')).readAsStringSync(),
       'new-lib',

@@ -1,0 +1,18 @@
+// !$*UTF8*$!
+{
+  rootObject = PROJECT;
+  objects = {
+    PROJECT = { isa = PBXProject; targets = (APP); mainGroup = GROUP; };
+    GROUP = { isa = PBXGroup; children = (RUNNER); sourceTree = "<group>"; };
+    RUNNER = { isa = PBXGroup; path = Runner; children = (MAIN, LAUNCH); sourceTree = "<group>"; };
+    MAIN = { isa = PBXFileReference; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
+    LAUNCH = { isa = PBXFileReference; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
+    MAIN_BUILD = { isa = PBXBuildFile; fileRef = MAIN; };
+    LAUNCH_BUILD = { isa = PBXBuildFile; fileRef = LAUNCH; };
+    RESOURCES = { isa = PBXResourcesBuildPhase; files = (MAIN_BUILD, LAUNCH_BUILD); };
+    APP = { isa = PBXNativeTarget; name = Runner; productType = com.apple.product-type.application; buildConfigurationList = CONFIGS; buildPhases = (RESOURCES); };
+    CONFIGS = { isa = XCConfigurationList; buildConfigurations = (DEBUG, RELEASE); defaultConfigurationName = Release; };
+    DEBUG = { isa = XCBuildConfiguration; name = Debug; buildSettings = { INFOPLIST_FILE = Runner/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = dev.xcross.iosAotProbe; IPHONEOS_DEPLOYMENT_TARGET = 16.0; }; };
+    RELEASE = { isa = XCBuildConfiguration; name = Release; buildSettings = { INFOPLIST_FILE = Runner/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = dev.xcross.iosAotProbe; IPHONEOS_DEPLOYMENT_TARGET = 16.0; }; };
+  };
+}

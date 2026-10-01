@@ -38,6 +38,41 @@ void main() {
   setUp(() => sandbox = Directory.systemTemp.createTempSync('xcross-build-'));
   tearDown(() => sandbox.deleteSync(recursive: true));
 
+  test(
+    'packages AOT tools and propagates compiler failure, restoring identity',
+    () async {
+      seed();
+      final original = File(generatedPath).readAsStringSync();
+      final calls = <List<String>>[];
+      String? aotOutput;
+      final build = buildXcross(
+        packageRoot: sandbox,
+        encodedVersion: 'unreleased',
+        released: false,
+        runBuild: (executable, arguments, {required workingDirectory}) async {
+          calls.add([executable, ...arguments]);
+          return 0;
+        },
+        buildAot: (repository, output) {
+          expect(repository, p.normalize(p.join(sandbox.path, '..', '..')));
+          aotOutput = output;
+          throw StateError('compiler failed');
+        },
+      );
+      await expectLater(build, throwsStateError);
+      expect(calls, hasLength(2));
+      expect(
+        calls.every((call) => call.first == Platform.resolvedExecutable),
+        isTrue,
+      );
+      expect(
+        aotOutput,
+        p.join(sandbox.path, 'build', 'cli', 'test', 'bundle', 'lib'),
+      );
+      expect(File(generatedPath).readAsStringSync(), original);
+    },
+  );
+
   test('embeds decoded ref identity only while the build runs', () async {
     seed();
     final original = File(generatedPath).readAsStringSync();
@@ -47,6 +82,7 @@ void main() {
       packageRoot: sandbox,
       encodedVersion: Uri.encodeComponent('feature/a,b=c'),
       released: false,
+      buildAot: (_, _) async {},
       runBuild: (executable, arguments, {required workingDirectory}) async {
         generatedDuringBuild = File(generatedPath).readAsStringSync();
         return 0;
@@ -128,6 +164,7 @@ void main() {
         packageRoot: sandbox,
         encodedVersion: Uri.encodeComponent('v1.2.1'),
         released: true,
+        buildAot: (_, _) async {},
         runBuild: (executable, arguments, {required workingDirectory}) async {
           generatedDuringBuild = File(generatedPath).readAsStringSync();
           return 0;

@@ -9,6 +9,7 @@ import 'package:xcross/src/cli/shared/device_selection.dart';
 import 'package:xcross/src/device/core_device_launch_profile.dart';
 import 'package:xcross/src/device/device_run_operation.dart';
 import 'package:xcross/src/errors.dart';
+import 'package:xcross/src/flutter/build/internal/build_lock.dart';
 import 'package:xcross/src/flutter/flutter.dart';
 
 part 'flutter_run_command.g.dart';
@@ -47,8 +48,7 @@ final class FlutterRunArgs extends CommonFlutterArgs {
 /// `xcross flutter run` — build, sign, install, launch, and hot-reload a
 /// Flutter app on a connected iOS 17+ device.
 ///
-/// Always builds a debug (JIT) app and always launches with hot reload (the
-/// flutter default).
+/// Debug launches with hot reload; release launches independently of xcross.
 final class FlutterRunCommand extends _$FlutterRunArgsCommand<void> {
   static bool shouldUseCoreDevice(int? osMajor) =>
       osMajor == null || osMajor >= 17;
@@ -78,31 +78,47 @@ final class FlutterRunCommand extends _$FlutterRunArgsCommand<void> {
   ];
 
   @override
-  Future<void> run() async {
+  Future<void> run() => withFlutterProjectLock(_runLocked);
+
+  Future<void> _runLocked() async {
     if (_options.verbose) Log.setVerbose();
 
     final options = await FlutterBuildOptions.resolve(
       target: _options.target,
+      obfuscate: _options.obfuscate,
+      splitDebugInfo: _options.splitDebugInfo,
       dartDefine: _options.dartDefine,
       dartDefineFromFile: _options.dartDefineFromFile,
       pub: _options.pub,
       flavor: _options.flavor,
+      mode: FlutterBuildMode.fromFlags(
+        debug: _options.debug,
+        release: _options.release,
+        profile: _options.profile,
+      ),
     );
     final pack = await FlutterPackOperation.pack(options: options);
 
-    final hotReload = await HotReloadSetup.buildHotReloadConfig(
-      target: _options.target,
-      dartDefines: options.dartDefines,
-      verbose: _options.verbose,
-    );
-    if (hotReload == null && Platform.environment['XCROSS_DAP'] == '1') {
+    final release = options.mode == FlutterBuildMode.release;
+    final hotReload = release
+        ? null
+        : await HotReloadSetup.buildHotReloadConfig(
+            target: _options.target,
+            dartDefines: options.dartDefines,
+            verbose: _options.verbose,
+          );
+    if (!release &&
+        hotReload == null &&
+        Platform.environment['XCROSS_DAP'] == '1') {
       throw XcrossError(
         'DAP launch requires the Flutter frontend_server artifacts needed '
         'for hot reload.',
       );
     }
 
-    final mode = hotReload != null
+    final mode = release
+        ? 'release/AOT, independent launch'
+        : hotReload != null
         ? 'debug/JIT, hot reload'
         : 'debug/JIT, attached via CoreDevice';
     Log.logInfo('App', '${pack.bundleId} ${Log.dim(mode)}');
@@ -112,10 +128,12 @@ final class FlutterRunCommand extends _$FlutterRunArgsCommand<void> {
       pack: pack,
       selector: _deviceSelector,
       mode: _searchMode,
-      launchProfile: CoreDeviceLaunchProfile.flutter(
-        arguments: _appArguments,
-        hotReload: hotReload,
-      ),
+      launchProfile: release
+          ? CoreDeviceLaunchProfile.flutterRelease(arguments: _appArguments)
+          : CoreDeviceLaunchProfile.flutter(
+              arguments: _appArguments,
+              hotReload: hotReload,
+            ),
     );
   }
 }

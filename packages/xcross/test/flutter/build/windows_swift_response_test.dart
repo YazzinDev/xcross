@@ -89,10 +89,9 @@ void main() {
     () async {
       final root = await Directory.systemTemp.createTemp('xcross-rsp-prune-');
       addTearDown(() => root.delete(recursive: true));
-      final previous = Directory.current;
-      Directory.current = root;
-      addTearDown(() => Directory.current = previous);
-      const scratch = 'scratch';
+      // Do not change the process-wide cwd while other test isolates launch
+      // tools: Windows keeps their inherited working directory open.
+      final scratch = p.relative(p.join(root.path, 'scratch'));
       Directory(scratch).createSync();
       final plan = File(p.join(scratch, 'debug.yaml'))
         ..writeAsStringSync(

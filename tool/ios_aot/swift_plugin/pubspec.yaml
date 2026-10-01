@@ -1,0 +1,13 @@
+name: xcross_swift_probe
+version: 1.0.0
+environment:
+  sdk: ^3.13.0
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  plugin:
+    platforms:
+      ios:
+        pluginClass: SwiftProbePlugin
+        dartPluginClass: DartProbePlugin
